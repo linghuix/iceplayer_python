@@ -3,31 +3,36 @@
 Usage (from the iceplayer_py folder, with the qtapp environment active):
 
     python build.py                 # check, test, build, smoke-test
-    python build.py --zip           # ...and also make dist/IcePlayer-<date>-<commit>.zip
-    python build.py --msi           # ...and also make the installer dist/IcePlayer-<version>.msi
+    python build.py --onefile       # ...and also the single-file dist/IcePlayer-<version>-portable.exe
+    python build.py --msi           # ...and also the installer dist/IcePlayer-<version>.msi
+    python build.py --zip           # ...and also zip the folder as dist/IcePlayer-<version>-portable.zip
     python build.py --skip-tests    # faster: don't run the test suite first
     python build.py --no-clean      # reuse PyInstaller's cache (faster rebuilds)
 
-Result: ``dist/IcePlayer/IcePlayer.exe``. Copy or zip the whole ``dist/IcePlayer``
-folder; the exe needs the ``_internal`` folder next to it. The playlist
-(IceList.json) is saved next to the exe.
+Result: ``dist/IcePlayer/IcePlayer.exe`` (folder version: the exe needs the
+``_internal`` folder next to it; this is what the MSI installs). With ``--onefile``
+also ``dist/IcePlayer-<version>-portable.exe``: ONE file, nothing else needed — it
+unpacks itself to a temporary folder at each start. Both save the playlist
+(IceList.json) next to the exe.
 
 Steps:
 1. Check the environment: PySide6 is importable and not 6.8.x (that Qt can't play
    MP3s with an embedded cover + LAME header), matches requirements.txt, and
    PyInstaller is installed.
 2. Run the test suite (``python -m pytest -q``) unless ``--skip-tests``.
-3. Run PyInstaller on ``IcePlayer.spec``.
-4. Smoke-test the built exe: the skin images are bundled, and the exe starts and
-   keeps running for a few seconds (off-screen, with a temporary playlist, so your
-   real IceList.json and any running player are not touched).
-5. Optionally zip ``dist/IcePlayer`` (``--zip``) and/or wrap it in a Windows
-   installer (``--msi``, see msi.py; version from ``iceplayer.__version__``).
+3. Run PyInstaller on ``IcePlayer.spec`` (folder version).
+4. Smoke-test it: the skin images are bundled, and the exe really starts — it is
+   given a short test song and must add it to its playlist file (off-screen, with
+   a temporary playlist and a private single-instance name, so your real
+   IceList.json and any running player are not touched). Prints the start-up time.
+5. ``--onefile``: run PyInstaller on ``IcePlayer-onefile.spec``, smoke-test that exe
+   the same way, and copy it to ``dist/IcePlayer-<version>-portable.exe``.
+6. Optionally zip the folder (``--zip``) and/or wrap it in a Windows installer
+   (``--msi``, see msi.py; version from ``iceplayer.__version__``).
 
 Exit code 0 on success, 1 if any step fails.
 """
 import argparse
-import datetime
 import os
 import re
 import shutil
@@ -36,12 +41,15 @@ import sys
 import tempfile
 import time
 import uuid
+import wave
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-SPEC = ROOT / "IcePlayer.spec"
+SPEC = ROOT / "IcePlayer.spec"                      # folder version
 DIST_DIR = ROOT / "dist" / "IcePlayer"
 EXE = DIST_DIR / ("IcePlayer.exe" if os.name == "nt" else "IcePlayer")
+ONEFILE_SPEC = ROOT / "IcePlayer-onefile.spec"      # single-file portable version
+ONEFILE_EXE = ROOT / "dist" / ("IcePlayer-portable.exe" if os.name == "nt" else "IcePlayer-portable")
 MIN_PYSIDE = (6, 9)   # 6.8.x cannot play MP3s with cover art + LAME header
 
 
@@ -139,22 +147,55 @@ def run_tests():
         raise BuildError("Tests failed; not building. Fix them, or use --skip-tests.")
 
 
-def build(clean: bool = True):
-    """Run PyInstaller on IcePlayer.spec, producing dist/IcePlayer/.
+def build_env() -> dict[str, str]:
+    """Environment for PyInstaller with a clean, predictable PATH.
+
+    PyInstaller looks for the DLLs a program needs along PATH and copies what it
+    finds into the build. If PATH contains another Python's DLL folder (for example
+    the conda base env's ``Library\\bin``, which Git Bash puts on PATH), it copies
+    that env's ``icuuc.dll`` (ICU 73). At run time Qt then loads it instead of
+    Windows' own ICU and stops with "DLL load failed while importing QtCore". So on
+    Windows PATH is reduced to the building Python's own folders plus Windows.
+
+    Returns:
+        A copy of ``os.environ`` with PATH replaced (unchanged on other systems).
+    """
+    env = dict(os.environ)
+    if os.name != "nt":
+        return env
+    windows = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    folders = [Path(sys.executable).parent]
+    for prefix in (Path(sys.prefix), Path(sys.base_prefix)):     # differ in a venv
+        folders += [prefix, prefix / "Library" / "bin", prefix / "Scripts"]
+    folders += [windows / "System32", windows, windows / "System32" / "Wbem"]
+    seen, path = set(), []
+    for f in folders:
+        if f.is_dir() and str(f).lower() not in seen:
+            seen.add(str(f).lower())
+            path.append(str(f))
+    env["PATH"] = os.pathsep.join(path)
+    return env
+
+
+def build(clean: bool = True, spec: Path = SPEC, expected: Path = EXE):
+    """Run PyInstaller on a spec file.
 
     Args:
-        clean: Empty PyInstaller's cache first (slower, but avoids stale files).
+        clean:    Empty PyInstaller's cache first (slower, but avoids stale files).
+        spec:     ``IcePlayer.spec`` (folder version, default) or
+                  ``IcePlayer-onefile.spec`` (single-file version).
+        expected: The exe that spec must produce.
 
     Raises:
         BuildError: if PyInstaller fails or the exe is missing afterwards.
     """
-    cmd = [sys.executable, "-m", "PyInstaller", str(SPEC.name), "--noconfirm"]
+    cmd = [sys.executable, "-m", "PyInstaller", str(spec.name), "--noconfirm"]
     if clean:
         cmd.append("--clean")
-    if run(cmd) != 0:
+    if run(cmd, env=build_env()) != 0:      # clean PATH: see build_env
         raise BuildError("PyInstaller failed (see its output above).")
-    if not EXE.is_file():
-        raise BuildError(f"PyInstaller finished but {EXE} does not exist.")
+    if not expected.is_file():
+        raise BuildError(f"PyInstaller finished but {expected} does not exist.")
 
 
 def folder_size_mb(folder: Path) -> float:
@@ -169,66 +210,145 @@ def folder_size_mb(folder: Path) -> float:
     return sum(f.stat().st_size for f in folder.rglob("*") if f.is_file()) / 1024 / 1024
 
 
-def smoke_test(seconds: float = 4.0):
-    """Check the built exe actually works.
-
-    Checks that the skin images were bundled, then starts the exe off-screen with a
-    temporary playlist file and a private single-instance name, and checks it is still
-    running after ``seconds`` (a missing DLL or import error makes it exit at once).
+def _write_test_song(path: Path, seconds: float = 0.5):
+    """Write a short silent WAV file for the smoke test.
 
     Args:
-        seconds: How long the exe must stay running.
+        path:    File to create.
+        seconds: Length of the silence.
+    """
+    with wave.open(str(path), "w") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(22050)
+        w.writeframes(bytes(2 * int(22050 * seconds)))
+
+
+def smoke_test(exe: Path = EXE, timeout: float = 60.0) -> float:
+    """Check that a built exe really starts and works.
+
+    Starts ``exe`` off-screen with a short test song as its argument (like
+    double-clicking a song), a temporary playlist file and a private single-instance
+    name. The exe must add the song to the playlist file — which only happens after
+    Qt, the window and the player have all started — and keep running.
+
+    Args:
+        exe:     The exe to test (folder version or single-file version).
+        timeout: Seconds to wait for the playlist file before giving up.
+
+    The single-file exe runs as two processes (a launcher that unpacks everything to
+    a ``_MEI...`` temp folder, and the real program), so the whole process tree is
+    stopped afterwards, and TEMP points into this test's own folder so the unpacked
+    files are deleted with it.
+
+    Returns:
+        Seconds from launch until the song was in the playlist (the start-up time).
 
     Raises:
-        BuildError: if images are missing or the exe exits early.
+        BuildError: if the exe exits, or doesn't add the song within ``timeout``.
     """
-    images = list(DIST_DIR.rglob("iceplayer/resources/background.png"))
-    if not images:
-        raise BuildError("Skin images are missing from the build (iceplayer/resources).")
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        song = Path(tmp) / "smoke test song.wav"
+        _write_test_song(song)
+        state = Path(tmp) / "IceList.json"
+        unpack = Path(tmp) / "temp"
+        unpack.mkdir()
         env = {**os.environ,
                "QT_QPA_PLATFORM": "offscreen",
-               "ICEPLAYER_STATE": str(Path(tmp) / "IceList.json"),
+               "TEMP": str(unpack), "TMP": str(unpack),     # single-file exe unpacks here
+               "ICEPLAYER_STATE": str(state),
                "ICEPLAYER_SERVER": f"iceplayer-build-check-{uuid.uuid4().hex[:8]}"}
-        proc = subprocess.Popen([str(EXE)], cwd=DIST_DIR, env=env)
+        started = time.monotonic()
+        proc = subprocess.Popen([str(exe), str(song)], cwd=exe.parent, env=env)
         try:
-            deadline = time.monotonic() + seconds
-            while time.monotonic() < deadline:
+            while not (state.is_file() and song.name in state.read_text(encoding="utf-8", errors="replace")):
                 if proc.poll() is not None:
-                    raise BuildError(f"The built exe exited right away (code {proc.returncode}).")
-                time.sleep(0.2)
-            print(f"IcePlayer.exe started and ran for {seconds:.0f} s: OK")
+                    raise BuildError(f"{exe.name} exited during start-up (code {proc.returncode}).")
+                if time.monotonic() - started > timeout:
+                    raise BuildError(f"{exe.name} did not finish starting within {timeout:.0f} s.")
+                time.sleep(0.1)
+            seconds = time.monotonic() - started
+            time.sleep(1.0)
+            if proc.poll() is not None:
+                raise BuildError(f"{exe.name} exited right after starting (code {proc.returncode}).")
+            print(f"{exe.name} started and added the test song in {seconds:.1f} s: OK")
+            return seconds
         finally:
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait(10)
+            _stop_process_tree(proc)
+
+
+def _stop_process_tree(proc: subprocess.Popen):
+    """Stop a process and every process it started (the single-file exe's launcher
+    starts the real program as a child; killing only the launcher would leave the
+    program running).
+
+    Args:
+        proc: The process started by ``subprocess.Popen``.
+    """
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                       capture_output=True)       # fails harmlessly if already gone
+    elif proc.poll() is None:
+        proc.kill()
+    try:
+        proc.wait(10)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def check_folder_build():
+    """Check the folder version: skin images bundled, no foreign ICU DLL.
+
+    Raises:
+        BuildError: if ``iceplayer/resources/background.png`` is missing in dist/IcePlayer,
+            or an ``icuuc.dll`` was bundled (Qt must use Windows' own ICU; a bundled one
+            comes from another Python on PATH and stops the exe from starting).
+    """
+    if not list(DIST_DIR.rglob("iceplayer/resources/background.png")):
+        raise BuildError("Skin images are missing from the build (iceplayer/resources).")
+    icu = [p.name for p in DIST_DIR.rglob("icu*.dll")]
+    if icu:
+        raise BuildError(f"Foreign ICU DLLs were bundled ({', '.join(icu)}); they come from "
+                         "another Python on PATH and stop Qt from loading.")
+
+
+def make_portable_exe() -> Path:
+    """Copy the single-file exe to its release name.
+
+    Returns:
+        Path of ``dist/IcePlayer-<version>-portable.exe`` (``-dirty`` added when built
+        from uncommitted changes, see ``build_label``).
+    """
+    target = ROOT / "dist" / f"IcePlayer-{build_label()}.exe"
+    shutil.copy2(ONEFILE_EXE, target)
+    return target
 
 
 def build_label() -> str:
-    """A name for the zip: today's date plus the git commit, e.g. "20261111-dbba0bc".
+    """A name for the portable exe / zip: the program version, e.g. "2.1.2-portable".
 
     Returns:
-        "<YYYYMMDD>-<short commit>", with "-dirty" if there are uncommitted changes,
-        or just the date when git is not available.
+        "<version>-portable", plus "-dirty" when built from uncommitted changes (so a
+        test build is never mistaken for a release).
     """
-    label = datetime.date.today().strftime("%Y%m%d")
+    label = f"{app_version()}-portable"
     try:
-        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT,
-                                capture_output=True, text=True, check=True).stdout.strip()
         dirty = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT,
-                               capture_output=True, text=True).stdout.strip()
-        label += f"-{commit}" + ("-dirty" if dirty else "")
+                               capture_output=True, text=True, check=True).stdout.strip()
+        if dirty:
+            label += "-dirty"
     except (OSError, subprocess.CalledProcessError):
-        pass
+        pass   # not a git checkout: just the version
     return label
 
 
 def make_zip() -> Path:
-    """Zip dist/IcePlayer for sharing.
+    """Zip dist/IcePlayer as the portable ("green") version: unzip anywhere and run
+    IcePlayer.exe, no installation; the playlist is saved next to the exe.
 
     Returns:
-        Path of ``dist/IcePlayer-<label>.zip``; unzipping it gives an ``IcePlayer``
-        folder containing IcePlayer.exe.
+        Path of ``dist/IcePlayer-<version>-portable.zip``; unzipping it gives an
+        ``IcePlayer`` folder containing IcePlayer.exe.
     """
     base = ROOT / "dist" / f"IcePlayer-{build_label()}"
     return Path(shutil.make_archive(str(base), "zip", root_dir=DIST_DIR.parent, base_dir="IcePlayer"))
@@ -279,31 +399,34 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Build IcePlayer.exe with PyInstaller.")
     parser.add_argument("--skip-tests", action="store_true", help="don't run the test suite first")
     parser.add_argument("--no-clean", action="store_true", help="keep PyInstaller's cache")
+    parser.add_argument("--onefile", action="store_true",
+                        help="also make the single-file portable exe")
     parser.add_argument("--zip", action="store_true", help="also zip dist/IcePlayer")
     parser.add_argument("--msi", action="store_true", help="also make a Windows installer (.msi)")
     args = parser.parse_args(argv)
 
+    steps = [("Checking the environment", check_environment),
+             ("Running tests" + (" (skipped)" if args.skip_tests else ""),
+              None if args.skip_tests else run_tests),
+             ("Building the folder version with PyInstaller", lambda: build(clean=not args.no_clean)),
+             ("Smoke-testing the folder version", lambda: (check_folder_build(), smoke_test(EXE)))]
+    extras = []
+    if args.onefile:
+        steps += [("Building the single-file portable exe",
+                   lambda: build(not args.no_clean, ONEFILE_SPEC, ONEFILE_EXE)),
+                  ("Smoke-testing the portable exe", lambda: smoke_test(ONEFILE_EXE)),
+                  ("Naming the portable exe", lambda: extras.append(make_portable_exe()))]
+    if args.zip:
+        steps.append(("Zipping the folder version", lambda: extras.append(make_zip())))
+    if args.msi:
+        steps.append(("Making the MSI installer", lambda: extras.append(make_installer())))
+
     started = time.monotonic()
-    total = 4 + args.zip + args.msi
     try:
-        step(f"1/{total} Checking the environment")
-        check_environment()
-        step(f"2/{total} Running tests" + (" (skipped)" if args.skip_tests else ""))
-        if not args.skip_tests:
-            run_tests()
-        step(f"3/{total} Building with PyInstaller")
-        build(clean=not args.no_clean)
-        step(f"4/{total} Smoke-testing the exe")
-        smoke_test()
-        extras = []
-        number = 5
-        if args.zip:
-            step(f"{number}/{total} Zipping")
-            extras.append(make_zip())
-            number += 1
-        if args.msi:
-            step(f"{number}/{total} Making the MSI installer")
-            extras.append(make_installer())
+        for number, (title, action) in enumerate(steps, start=1):
+            step(f"{number}/{len(steps)} {title}")
+            if action is not None:
+                action()
     except BuildError as e:
         print(f"\nBUILD FAILED: {e}", file=sys.stderr)
         return 1

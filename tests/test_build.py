@@ -22,6 +22,9 @@ How to run
 ----------
     python -m pytest tests/test_build.py -v
 """
+import os
+import sys
+
 import pytest
 
 from conftest import ROOT
@@ -302,3 +305,89 @@ def test_app_version_is_a_valid_msi_version():
     version = build.app_version()
     parts = version.split(".")
     assert 2 <= len(parts) <= 4 and all(p.isdigit() for p in parts)
+
+
+# =============================================================== portable exe
+@pytest.mark.parametrize("porcelain, expected", [("", "-portable"), (" M build.py\n", "-portable-dirty")])
+def test_build_label_marks_uncommitted_builds(monkeypatch, porcelain, expected):
+    """Portable files are named <version>-portable, with -dirty when built from
+    uncommitted changes, so a test build is never released by mistake."""
+    import subprocess
+    from types import SimpleNamespace
+    monkeypatch.setattr(build.subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(stdout=porcelain, returncode=0))
+    assert build.build_label() == f"{build.app_version()}{expected}"
+
+
+def test_write_test_song(tmp_path):
+    """The smoke test's song is a valid WAV file of the requested length."""
+    import wave
+    song = tmp_path / "s.wav"
+    build._write_test_song(song, 0.5)
+    with wave.open(str(song)) as w:
+        assert abs(w.getnframes() / w.getframerate() - 0.5) < 0.01
+
+
+@pytest.mark.skipif(os.name != "nt", reason="uses taskkill (Windows)")
+def test_stop_process_tree_stops_child_processes(tmp_path):
+    """Regression: the single-file exe runs as a launcher plus a child process; the
+    smoke test used to kill only the launcher and leave IcePlayer running. Here a
+    parent Python starts a child Python; stopping the tree must end both."""
+    import subprocess
+    import time
+    pid_file = tmp_path / "child.pid"
+    code = ("import subprocess, sys, time; "
+            "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+            f"open(r'{pid_file}', 'w').write(str(c.pid)); time.sleep(60)")
+    parent = subprocess.Popen([sys.executable, "-c", code])
+    deadline = time.monotonic() + 20
+    while not (pid_file.is_file() and pid_file.read_text()) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    child = int(pid_file.read_text())
+    build._stop_process_tree(parent)
+    time.sleep(0.5)
+    alive = subprocess.run(["tasklist", "/FI", f"PID eq {child}", "/NH"],
+                           capture_output=True, text=True).stdout
+    assert parent.poll() is not None
+    assert str(child) not in alive, "child process still running"
+
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PATH cleaning only happens on Windows")
+def test_build_env_path_drops_other_pythons_dll_folders(tmp_path, monkeypatch):
+    """PyInstaller copies DLLs it finds on PATH. Another Python's DLL folder on PATH
+    (e.g. conda base's Library\bin, which Git Bash adds) made it bundle a foreign
+    icuuc.dll and the exe failed with "DLL load failed while importing QtCore".
+    build_env() must keep only this Python's folders and Windows.
+
+    Input: PATH with a fake foreign Library\bin first. Expected: it is gone; the
+    building Python's folder and System32 are kept; nothing else in the env changes.
+    """
+    foreign = tmp_path / "miniconda3" / "Library" / "bin"
+    foreign.mkdir(parents=True)
+    monkeypatch.setenv("PATH", os.pathsep.join([str(foreign), os.environ["PATH"]]))
+    monkeypatch.setenv("ICEPLAYER_TEST_MARKER", "kept")
+    env = build.build_env()
+    folders = [p.lower() for p in env["PATH"].split(os.pathsep)]
+    assert str(foreign).lower() not in folders
+    assert os.path.dirname(sys.executable).lower() in folders
+    system32 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32").lower()
+    assert system32 in folders
+    assert env["ICEPLAYER_TEST_MARKER"] == "kept"
+    assert os.environ["PATH"].startswith(str(foreign))      # the real env is untouched
+
+
+def test_check_folder_build_refuses_bundled_icu(tmp_path, monkeypatch):
+    """A bundled icuuc.dll stops the exe from starting, so check_folder_build must fail.
+
+    Input: a fake dist folder with the skin image, first without and then with an
+    icuuc.dll. Expected: passes without it; BuildError naming the DLL with it.
+    """
+    dist = tmp_path / "IcePlayer"
+    (dist / "_internal" / "iceplayer" / "resources").mkdir(parents=True)
+    (dist / "_internal" / "iceplayer" / "resources" / "background.png").write_bytes(b"png")
+    monkeypatch.setattr(build, "DIST_DIR", dist)
+    build.check_folder_build()                                # fine without ICU
+    (dist / "_internal" / "icuuc.dll").write_bytes(b"dll")
+    with pytest.raises(build.BuildError, match="icuuc.dll"):
+        build.check_folder_build()

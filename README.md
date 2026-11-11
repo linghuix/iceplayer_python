@@ -69,7 +69,7 @@ python run.py "D:/Music/song.mp3"
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 350 tests, about 40 s
+python -m pytest            # 356 tests, about 40 s
 python -m pytest tests/test_lyrics.py -v    # one file, verbose
 ```
 
@@ -85,25 +85,29 @@ your real `IceList.json` and never talk to a player you have open.
 | `tests/test_player.py` | playlist add/remove/clear, dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, progress slider (follows playback, drag to seek, click jumps to the mouse), real-world MP3s (ID3 tags, embedded cover, LAME header), lyrics sync, cover art, drag & drop, saving on close |
 | `tests/test_mini.py` | about dialog, mini window buttons and menu, syncing with the main window |
 | `tests/test_app.py` | single-instance handoff from a second process, where the playlist is saved, the real `run.py` / `python -m iceplayer` launchers |
-| `tests/test_build.py` | the MSI builder (files, folders, shortcuts, upgrade rules, every wizard dialog and button), `build.py` version checks |
+| `tests/test_build.py` | the MSI builder (files, folders, shortcuts, upgrade rules, every wizard dialog and button), `build.py` helpers (version checks, portable naming, clean build PATH, no bundled ICU, stopping the single-file exe's process tree) |
 
 ## Build IcePlayer.exe
 
 ```bash
 pip install -r requirements-dev.txt     # PyInstaller + pytest (once)
 python build.py                         # check, test, build, smoke-test (~1.5 min)
-python build.py --zip                   # ...and make dist/IcePlayer-<date>-<commit>.zip
-python build.py --msi                   # ...and make the installer dist/IcePlayer-<version>.msi
+python build.py --onefile               # ...and the single-file dist/IcePlayer-<version>-portable.exe
+python build.py --msi                   # ...and the installer dist/IcePlayer-<version>.msi
+python build.py --zip                   # ...and zip the folder version (rarely needed)
 python build.py --skip-tests --no-clean # quick rebuild
 ```
 
-The result is `dist/IcePlayer/IcePlayer.exe` (a ~130 MB folder, ~50 MB zipped).
-Copy or zip the whole `dist/IcePlayer` folder: the exe needs the `_internal`
-folder next to it. The playlist is saved as `IceList.json` next to the exe.
+The main result is `dist/IcePlayer/IcePlayer.exe`, the folder version (~130 MB):
+the exe needs the `_internal` folder next to it. The MSI installs this folder.
 
 `build.py` stops with a message (exit code 1) if PySide6 is older than 6.9 (the
-MP3 cover-art bug), if PyInstaller is missing, if a test fails, or if the built exe
-doesn't start. In VS Code, **Ctrl+Shift+B** runs it; **Terminal → Run Task… →
+MP3 cover-art bug), if PyInstaller is missing, if a test fails, or if a built exe
+doesn't start, or if a foreign `icuuc.dll` got bundled. PyInstaller runs with a clean PATH (only
+the building Python's folders and Windows), so the result is the same from PowerShell, Git Bash
+or VS Code. Its self-check starts each exe off-screen with a short test song and
+waits until the song is in the playlist file, so it proves the program really
+started, and prints how long that took. In VS Code, **Ctrl+Shift+B** runs it; **Terminal → Run Task… →
 "Build: installer (.msi)"** makes the MSI.
 
 ### The MSI installer
@@ -139,13 +143,36 @@ msiexec /i dist\IcePlayer-2.1.2.msi /qn
 msiexec /x dist\IcePlayer-2.1.2.msi /qn
 ```
 
+### Portable ("green") version: one exe
+
+`python build.py --onefile` writes `dist/IcePlayer-<version>-portable.exe` (~52 MB):
+**one file, nothing else needed**. Put it anywhere (a USB stick works too) and
+double-click it: no installation, no admin rights, nothing written to the registry.
+The playlist is saved as `IceList.json` next to the exe; delete both to remove it.
+
+How it works, and what it costs compared with the folder version:
+
+- Everything (Python, Qt, the skin images) is packed inside the exe. At each start
+  it unpacks itself into a `_MEI…` folder in your temp folder (~130 MB) and runs from
+  there; closing IcePlayer normally deletes that folder again.
+- So it **starts a few seconds slower** (measured here: about 5–7 s, against 1–5 s
+  for the folder version).
+- If it is force-killed (Task Manager), the `_MEI…` folder stays behind in
+  `%TEMP%` and can be deleted by hand.
+- Self-unpacking exes are flagged by antivirus programs more often.
+
+The file name gets `-dirty` when built from uncommitted changes, so test builds are
+never mistaken for releases. (`--zip` still packs the folder version as
+`IcePlayer-<version>-portable.zip`, if you prefer that.)
+
 ## Layout
 
 ```
 build.py                build IcePlayer.exe (PyInstaller, see "Build IcePlayer.exe")
 msi.py                  turn dist/IcePlayer into the .msi installer (used by build.py --msi)
 docs/screenshot.png     README picture; docs/make_screenshot.py regenerates it
-IcePlayer.spec          PyInstaller recipe used by build.py
+IcePlayer.spec          PyInstaller recipe: folder version (used by the MSI)
+IcePlayer-onefile.spec  PyInstaller recipe: single-file portable exe (build.py --onefile)
 run.py                  launcher
 iceplayer/app.py        startup + single-instance (QLocalServer)
 iceplayer/player.py     main window and playback
