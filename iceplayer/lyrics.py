@@ -127,6 +127,9 @@ LRCLIB_URL = "https://lrclib.net/api/search"
 USER_AGENT = "IcePlayer-python (https://github.com/linghuix/iceplayer_python)"
 UNKNOWN_ARTIST = "未知音乐家"      # the artist label when a song has no artist tag
 LOG_RESULTS = 10                  # how many search results are listed in the console
+# Title-only search (after title + artist found nothing): accept only results at
+# most this much longer/shorter than the song, if its length is known.
+TITLE_ONLY_MAX_DIFF_MS = 10_000
 
 # Console messages about the online search ("[歌词] ..."). app.main() prints INFO
 # messages to the console when there is one (python run.py, VS Code).
@@ -158,20 +161,22 @@ def guess_title_artist(title: str, artist: str, file_stem: str) -> tuple[str, st
     return title, artist
 
 
-def pick_lyrics(results: list, duration_ms: int = 0) -> str | None:
+def pick_lyrics(results: list, duration_ms: int = 0, max_diff_ms: int = 0) -> str | None:
     """Choose the best lyrics from lrclib's search results.
 
     Args:
         results:     The decoded JSON list; each item may have ``syncedLyrics`` (LRC text
                      with time tags, or null) and ``duration`` (seconds).
         duration_ms: Length of the playing song, 0 if unknown.
+        max_diff_ms: If > 0 and the song length is known, results whose length differs
+                     by more than this are rejected (used for title-only searches, which
+                     also find other songs with the same name). 0: no limit.
 
     Returns:
         The ``syncedLyrics`` of the result whose duration is closest to the song's
         (the first such result if the duration is unknown, so lrclib's own ranking
-        decides), or None if no result has timed lyrics. Untimed ``plainLyrics`` are
-        ignored: the lyric bar needs times. Versions more than 10 s longer or shorter
-        (e.g. live recordings) are only used when nothing closer exists.
+        decides), or None if no (acceptable) result has timed lyrics. Untimed
+        ``plainLyrics`` are ignored: the lyric bar needs times.
     """
     timed = [r for r in results if isinstance(r, dict)
              and isinstance(r.get("syncedLyrics"), str) and parse_lrc(r["syncedLyrics"])]
@@ -193,6 +198,14 @@ def pick_lyrics(results: list, duration_ms: int = 0) -> str | None:
             return float("inf")
     if duration_ms > 0:
         timed.sort(key=distance)       # stable: equal distances keep lrclib's order
+        if max_diff_ms > 0:
+            close = [r for r in timed if distance(r) <= max_diff_ms]
+            if len(close) < len(timed):
+                log.info("[歌词] 排除 %d 个时长与歌曲 (%.0f 秒) 相差超过 %.0f 秒的结果",
+                         len(timed) - len(close), duration_ms / 1000, max_diff_ms / 1000)
+            timed = close
+            if not timed:
+                return None
     best = timed[0]
     log.info("[歌词] 选中 id=%s %s - %s (%s 秒%s)", best.get("id"), best.get("artistName"),
              best.get("trackName"), best.get("duration"),
@@ -205,7 +218,11 @@ def search_lrclib(title: str, artist: str = "", duration_ms: int = 0,
     """Search lrclib.net for a song's timed lyrics.
 
     Calls ``<LRCLIB_URL>?track_name=<title>&artist_name=<artist>`` (artist left out
-    when unknown). Blocks until the answer arrives, so call it from a background thread.
+    when unknown). If title + artist find nothing, searches again by title only
+    (the artist tag may be spelled differently, e.g. "Jay Chou" / "周杰伦"); then
+    results more than ``TITLE_ONLY_MAX_DIFF_MS`` longer or shorter than the song are
+    rejected, because they are probably another song with the same name. Blocks until
+    the answer arrives, so call it from a background thread.
 
     Args:
         title:       Song title, e.g. "晴天". Nothing is searched if it is empty.
@@ -223,19 +240,40 @@ def search_lrclib(title: str, artist: str = "", duration_ms: int = 0,
     if not title.strip():
         log.info("[歌词] 没有歌名，不搜索")
         return None
-    params = {"track_name": title}
+    log.info("[歌词] 搜索: 歌名=%s  歌手=%s", title, artist or "(未知)")
     if artist:
-        params["artist_name"] = artist
+        lrc = pick_lyrics(_lrclib_get({"track_name": title, "artist_name": artist}, timeout),
+                          duration_ms)
+        if lrc:
+            return lrc
+        log.info("[歌词] 歌名+歌手没有找到，改为只搜索歌名: %s", title)
+        return pick_lyrics(_lrclib_get({"track_name": title}, timeout), duration_ms,
+                           max_diff_ms=TITLE_ONLY_MAX_DIFF_MS)
+    return pick_lyrics(_lrclib_get({"track_name": title}, timeout), duration_ms)
+
+
+def _lrclib_get(params: dict, timeout: float) -> list:
+    """One request to the lrclib search API.
+
+    Args:
+        params:  Query, e.g. ``{"track_name": "晴天", "artist_name": "周杰伦"}``.
+        timeout: Seconds to wait.
+
+    Returns:
+        The decoded JSON results (an empty list if the answer isn't a list).
+
+    Raises:
+        OSError / ValueError: see ``search_lrclib``.
+    """
     base = os.environ.get("ICEPLAYER_LRCLIB_URL", LRCLIB_URL)
     url = base + "?" + urllib.parse.urlencode(params)
-    log.info("[歌词] 搜索: 歌名=%s  歌手=%s", title, artist or "(未知)")
     log.info("[歌词] 网址: %s", base + "?" + "&".join(f"{k}={v}" for k, v in params.items()))
     log.info("[歌词]   (编码后: %s)", url)
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         log.info("[歌词] 服务器回应 HTTP %s", response.status)
         results = json.loads(response.read().decode("utf-8"))
-    return pick_lyrics(results if isinstance(results, list) else [], duration_ms)
+    return results if isinstance(results, list) else []
 
 
 def save_lrc_for(audio_path: str, text: str) -> bool:

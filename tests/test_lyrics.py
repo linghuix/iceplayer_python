@@ -356,3 +356,73 @@ def test_search_log_lists_at_most_ten_results(lrclib, caplog):
     search_lrclib("x")
     assert "10. id=9" in caplog.text and "11. id=10" not in caplog.text
     assert "还有 15 个" in caplog.text
+
+
+# --------------------------------------------------- title-only fallback search
+def _only_without_artist(results):
+    """A fake-server answer: nothing for title + artist, ``results`` for title only."""
+    return lambda query: [] if "artist_name" in query else results
+
+
+def test_search_falls_back_to_title_only(lrclib, caplog):
+    """Title + artist finds nothing (e.g. the tag says "Jay Chou", lrclib has 周杰伦).
+    Expected: a second search with only the title, whose lyrics are returned, and a
+    console line saying so."""
+    import logging
+    caplog.set_level(logging.INFO, logger="iceplayer.lyrics")
+    lrclib.respond = _only_without_artist([{"duration": 270.0, "syncedLyrics": SUNNY}])
+    assert search_lrclib("晴天", "Jay Chou", 270_000) == SUNNY
+    assert [r.get("artist_name") for r in lrclib.requests] == ["Jay Chou", None]
+    assert lrclib.requests[1]["track_name"] == "晴天"
+    assert "歌名+歌手没有找到，改为只搜索歌名: 晴天" in caplog.text
+
+
+def test_no_fallback_when_title_and_artist_find_lyrics(lrclib):
+    """Title + artist already finds lyrics: only one request."""
+    lrclib.results = [{"syncedLyrics": SUNNY}]
+    assert search_lrclib("晴天", "周杰伦") == SUNNY
+    assert len(lrclib.requests) == 1
+
+
+def test_no_fallback_without_artist(lrclib):
+    """No artist: the first search already was title-only, so it isn't repeated."""
+    assert search_lrclib("晴天") is None
+    assert len(lrclib.requests) == 1
+
+
+def test_no_fallback_after_an_error(lrclib):
+    """The first request fails (HTTP 500): the error is raised at once (the player
+    shows "search failed"), no second request."""
+    lrclib.status = 500
+    with pytest.raises(OSError):
+        search_lrclib("晴天", "周杰伦")
+    assert len(lrclib.requests) == 1
+
+
+@pytest.mark.parametrize("found_seconds, accepted", [(270.0, True), (279.0, True),
+                                                     (281.0, False), (200.0, False)])
+def test_title_only_rejects_songs_of_another_length(lrclib, found_seconds, accepted):
+    """A title-only search also finds other songs with the same name. For a 270 s song
+    only results within 10 s are accepted: 270 / 279 s yes, 281 / 200 s no."""
+    lrclib.respond = _only_without_artist([{"duration": found_seconds, "syncedLyrics": SUNNY}])
+    assert (search_lrclib("晴天", "Someone", 270_000) == SUNNY) is accepted
+
+
+def test_title_only_with_unknown_length_takes_first_result(lrclib):
+    """Song length not known yet (0): the length check can't be done, lrclib's first
+    timed result is used."""
+    lrclib.respond = _only_without_artist([{"duration": 100.0, "syncedLyrics": LIVE},
+                                           {"duration": 270.0, "syncedLyrics": SUNNY}])
+    assert search_lrclib("晴天", "Someone", 0) == LIVE
+
+
+def test_pick_lyrics_max_diff(caplog):
+    """pick_lyrics with max_diff_ms: too long/short results are dropped (and the
+    console says how many); without a song length nothing is dropped."""
+    import logging
+    caplog.set_level(logging.INFO, logger="iceplayer.lyrics")
+    results = [{"duration": 200.0, "syncedLyrics": LIVE}, {"duration": 268.0, "syncedLyrics": SUNNY}]
+    assert pick_lyrics(results, 270_000, max_diff_ms=10_000) == SUNNY
+    assert "排除 1 个" in caplog.text
+    assert pick_lyrics(results[:1], 270_000, max_diff_ms=10_000) is None
+    assert pick_lyrics(results[:1], 0, max_diff_ms=10_000) == LIVE

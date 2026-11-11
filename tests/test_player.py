@@ -1219,7 +1219,7 @@ def test_online_search_uses_mp3_tags(player, tagged_mp3, lrclib):
     player.play_index(0)
     assert wait_until(lambda: player.artist_label.text() == "テスト歌手")
     player.toggle_lyrics()
-    assert wait_until(lambda: len(lrclib.requests) == 1)
+    assert wait_until(lambda: len(lrclib.requests) >= 1)
     assert lrclib.requests[0]["track_name"] == "Test Song Title"
     assert lrclib.requests[0]["artist_name"] == "テスト歌手"
 
@@ -1272,6 +1272,17 @@ def test_lyric_search_console_messages_when_nothing_found(player, songs, lrclib,
     player.play_index(0)
     player.toggle_lyrics()
     assert wait_until(lambda: expected in caplog.text)
+
+def test_online_lyrics_title_only_fallback(player, tagged_mp3, lrclib):
+    """In the player: the MP3's title + artist find nothing, the title-only search
+    finds lyrics; they are shown."""
+    lrclib.respond = lambda q: [] if "artist_name" in q else [{"syncedLyrics": ONLINE_LRC}]
+    player.add_files([tagged_mp3])
+    player.play_index(0)
+    assert wait_until(lambda: player.artist_label.text() == "テスト歌手")
+    player.toggle_lyrics()
+    assert wait_until(lambda: bool(player.lyrics))
+    assert [r.get("artist_name") for r in lrclib.requests] == ["テスト歌手", None]
 
 # =============================================================== 10. other windows & buttons
 def test_toggle_lyrics(player):

@@ -48,6 +48,9 @@ python run.py "D:/Music/song.mp3"
 - Online lyrics: if the song has no `song.lrc`, showing the lyric bar (lyric button,
   or 桌面歌词 in the mini window) searches [lrclib.net](https://lrclib.net) in the
   background, by title + artist from the tags, or from an "Artist - Title" file name.
+  If title + artist find nothing (e.g. the tag says "Jay Chou" but lrclib has
+  周杰伦), it searches again by title only, and then accepts only versions within
+  10 s of the song's length, so a different song with the same name isn't used.
   The version whose length matches the song is used and saved as `song.lrc` next to
   it, so later plays work offline. The bar shows 正在搜索歌词… meanwhile, then
   没有找到歌词 (not searched again for that song) or 歌词搜索失败，请检查网络 (tried
@@ -80,7 +83,7 @@ python run.py "D:/Music/song.mp3"
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 390 tests, about 50 s
+python -m pytest            # 401 tests, about 50 s
 python -m pytest tests/test_lyrics.py -v    # one file, verbose
 ```
 

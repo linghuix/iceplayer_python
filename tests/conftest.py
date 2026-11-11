@@ -297,6 +297,8 @@ def lrclib(monkeypatch):
 
     Yields an object with:
         results   list sent back as JSON for every search (default: empty list).
+        respond   optional function(query dict) -> results, used instead of
+                  ``results`` (e.g. answer only searches without an artist).
         status    HTTP status to answer with (default 200; e.g. 500 to fail).
         delay     seconds to wait before answering (default 0).
         requests  list of query dicts received, e.g. [{"track_name": "晴天", ...}].
@@ -308,14 +310,15 @@ def lrclib(monkeypatch):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.parse import parse_qsl, urlsplit
 
-    state = SimpleNamespace(results=[], status=200, delay=0.0, requests=[])
+    state = SimpleNamespace(results=[], respond=None, status=200, delay=0.0, requests=[])
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            query = urlsplit(self.path).query
-            state.requests.append(dict(parse_qsl(query)) | {"_ua": self.headers.get("User-Agent", "")})
+            query = dict(parse_qsl(urlsplit(self.path).query))
+            state.requests.append(query | {"_ua": self.headers.get("User-Agent", "")})
             time.sleep(state.delay)
-            body = json.dumps(state.results).encode("utf-8")
+            results = state.respond(query) if state.respond else state.results
+            body = json.dumps(results).encode("utf-8")
             self.send_response(state.status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
