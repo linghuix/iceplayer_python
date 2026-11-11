@@ -9,6 +9,7 @@ How the single-instance rule works:
 """
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication
@@ -20,7 +21,7 @@ from .player import IcePlayer
 from .widgets import FONT_FAMILY, res
 
 def _app_dir() -> Path:
-    """Find the folder the playlist file is kept in.
+    """Find the folder the program lives in.
 
     Returns:
         The folder of IcePlayer.exe when running as a packaged .exe (PyInstaller sets
@@ -31,9 +32,45 @@ def _app_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _is_writable(folder: Path) -> bool:
+    """Check whether files can be created in a folder (by really creating one).
+
+    Args:
+        folder: Folder to test.
+
+    Returns:
+        True if a temporary file could be created and removed there; False for
+        read-only places such as ``C:\\Program Files`` without admin rights.
+    """
+    try:
+        with tempfile.NamedTemporaryFile(dir=folder):
+            return True
+    except OSError:
+        return False
+
+
+def default_state_file() -> Path:
+    """Choose where the playlist file (IceList.json) is kept.
+
+    Returns:
+        * running from source: ``iceplayer_py/IceList.json``;
+        * portable exe (zip, folder you can write to): next to IcePlayer.exe;
+        * installed exe (MSI, in Program Files, not writable):
+          ``%LOCALAPPDATA%\\IcePlayer\\IceList.json`` (the folder is created).
+    """
+    folder = _app_dir()
+    if getattr(sys, "frozen", False) and not _is_writable(folder):
+        folder = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "IcePlayer"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass   # save_state ignores write errors, so the player still runs
+    return folder / "IceList.json"
+
+
 # Both can be overridden (used by the tests so they never touch the real playlist).
 SERVER_NAME = os.environ.get("ICEPLAYER_SERVER", "iceplayer-python")   # local pipe name
-STATE_FILE = Path(os.environ.get("ICEPLAYER_STATE", _app_dir() / "IceList.json"))
+STATE_FILE = Path(os.environ.get("ICEPLAYER_STATE") or default_state_file())
 
 
 ACK = b"ok"   # reply the running player sends after it has read a message

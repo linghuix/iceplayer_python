@@ -127,6 +127,42 @@ def test_state_file_env_override():
     assert out[0].replace("\\", "/") == "X:/custom.json" and out[1] == "custom-name"
 
 
+# =============================================================== where the playlist is saved
+def test_state_file_from_source(monkeypatch):
+    """Running from source (python run.py): IceList.json lives in the iceplayer_py folder."""
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    assert app_mod.default_state_file() == ROOT / "IceList.json"
+
+
+def test_state_file_portable_exe_next_to_exe(monkeypatch, tmp_path):
+    """Packaged exe in a writable folder (the zip): IceList.json goes next to IcePlayer.exe."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "IcePlayer.exe"))
+    assert app_mod.default_state_file() == tmp_path / "IceList.json"
+
+
+def test_state_file_installed_exe_uses_local_appdata(monkeypatch, tmp_path):
+    """Installed exe (MSI, Program Files is read-only for normal users): IceList.json goes
+    to %LOCALAPPDATA%\\IcePlayer, and that folder is created.
+
+    How: the exe folder is reported as not writable by replacing ``_is_writable``;
+    LOCALAPPDATA points to a temporary folder.
+    """
+    exe_dir, appdata = tmp_path / "Program Files" / "IcePlayer", tmp_path / "AppData"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "IcePlayer.exe"))
+    monkeypatch.setattr(app_mod, "_is_writable", lambda folder: folder != exe_dir)
+    monkeypatch.setenv("LOCALAPPDATA", str(appdata))
+    assert app_mod.default_state_file() == appdata / "IcePlayer" / "IceList.json"
+    assert (appdata / "IcePlayer").is_dir()
+
+
+def test_is_writable(tmp_path):
+    """A normal temporary folder is writable; a folder that doesn't exist is not."""
+    assert app_mod._is_writable(tmp_path)
+    assert not app_mod._is_writable(tmp_path / "missing")
+
+
 # =============================================================== end-to-end (real program)
 @pytest.fixture
 def launch_env(tmp_path):

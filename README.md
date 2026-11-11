@@ -37,7 +37,9 @@ python run.py "D:/Music/song.mp3"
   it to go back to the main window.
 - About dialog: click the logo.
 - Single instance: running it again with a file plays that file in the open window.
-- The playlist, volume and play mode are saved to `IceList.json`.
+- The playlist, volume and play mode are saved to `IceList.json`: next to `run.py`
+  or a portable `IcePlayer.exe`, or in `%LOCALAPPDATA%\IcePlayer\` when installed
+  with the MSI (Program Files isn't writable).
 
 ## Changes from the C++ version
 
@@ -53,7 +55,7 @@ python run.py "D:/Music/song.mp3"
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 300 tests, about 35 s
+python -m pytest            # 325 tests, about 35 s
 python -m pytest tests/test_lyrics.py -v    # one file, verbose
 ```
 
@@ -68,17 +70,63 @@ your real `IceList.json` and never talk to a player you have open.
 | `tests/test_widgets.py` | every skin image, hover buttons, scrolling title, volume popup, window dragging |
 | `tests/test_player.py` | playlist add/remove/clear, dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, progress slider (follows playback, drag to seek, click jumps to the mouse), real-world MP3s (ID3 tags, embedded cover, LAME header), lyrics sync, cover art, drag & drop, saving on close |
 | `tests/test_mini.py` | about dialog, mini window buttons and menu, syncing with the main window |
-| `tests/test_app.py` | single-instance handoff from a second process, the real `run.py` / `python -m iceplayer` launchers |
+| `tests/test_app.py` | single-instance handoff from a second process, where the playlist is saved, the real `run.py` / `python -m iceplayer` launchers |
+| `tests/test_build.py` | the MSI builder (files, folders, shortcuts, upgrade rules), `build.py` version checks |
+
+## Build IcePlayer.exe
+
+```bash
+pip install -r requirements-dev.txt     # PyInstaller + pytest (once)
+python build.py                         # check, test, build, smoke-test (~1.5 min)
+python build.py --zip                   # ...and make dist/IcePlayer-<date>-<commit>.zip
+python build.py --msi                   # ...and make the installer dist/IcePlayer-<version>.msi
+python build.py --skip-tests --no-clean # quick rebuild
+```
+
+The result is `dist/IcePlayer/IcePlayer.exe` (a ~130 MB folder, ~50 MB zipped).
+Copy or zip the whole `dist/IcePlayer` folder: the exe needs the `_internal`
+folder next to it. The playlist is saved as `IceList.json` next to the exe.
+
+`build.py` stops with a message (exit code 1) if PySide6 is older than 6.9 (the
+MP3 cover-art bug), if PyInstaller is missing, if a test fails, or if the built exe
+doesn't start. In VS Code, **Ctrl+Shift+B** runs it; **Terminal → Run Task… →
+"Build: installer (.msi)"** makes the MSI.
+
+### The MSI installer
+
+`python build.py --msi` also writes `dist/IcePlayer-<version>.msi` (~50 MB), made by
+`msi.py` with Python's built-in `msilib` (needs Windows and Python 3.12 or older,
+i.e. the `qtapp` env; no extra tools). Double-clicking it:
+
+- installs IcePlayer to `C:\Program Files\IcePlayer` for all users (one admin prompt);
+- adds **IcePlayer** to the Start menu and the desktop;
+- lists IcePlayer, with its icon, in **Settings → Apps**, where it can be uninstalled;
+- replaces an older installed version; refuses to install over a newer one.
+
+The version comes from `__version__` in `iceplayer/__init__.py` (now 2.1.0).
+**Raise it for every installer you hand out**, otherwise Windows can't tell the new
+MSI is an upgrade. The installed program keeps its playlist in
+`%LOCALAPPDATA%\IcePlayer\IceList.json`, so it survives upgrades and uninstalling.
+
+Silent install / uninstall (e.g. for scripts), from an admin terminal:
+
+```bash
+msiexec /i dist\IcePlayer-2.1.0.msi /qn
+msiexec /x dist\IcePlayer-2.1.0.msi /qn
+```
 
 ## Layout
 
 ```
+build.py                build IcePlayer.exe (PyInstaller, see "Build IcePlayer.exe")
+msi.py                  turn dist/IcePlayer into the .msi installer (used by build.py --msi)
+IcePlayer.spec          PyInstaller recipe used by build.py
 run.py                  launcher
 iceplayer/app.py        startup + single-instance (QLocalServer)
 iceplayer/player.py     main window and playback
 iceplayer/playlist.py   play-mode logic, saving
 iceplayer/lyrics.py     LRC parser + desktop lyric window
 iceplayer/mini.py       mini window + about dialog
-iceplayer/widgets.py    hover buttons, scrolling label, volume button, dragging
+iceplayer/widgets.py    hover buttons, scrolling label, seek slider, volume button, dragging
 iceplayer/resources/    skin images (copied from ../ICEPLAYER/Resources)
 ```
