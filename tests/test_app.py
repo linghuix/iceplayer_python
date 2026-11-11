@@ -158,9 +158,84 @@ def test_state_file_installed_exe_uses_local_appdata(monkeypatch, tmp_path):
 
 
 def test_is_writable(tmp_path):
-    """A normal temporary folder is writable; a folder that doesn't exist is not."""
+    """A normal temporary folder is writable (and the test file is removed again);
+    a folder that doesn't exist is not."""
     assert app_mod._is_writable(tmp_path)
+    assert list(tmp_path.iterdir()) == []
     assert not app_mod._is_writable(tmp_path / "missing")
+
+
+def test_is_writable_tries_only_once(monkeypatch, tmp_path):
+    """"Access denied" gives False after a single attempt — no retry loop.
+
+    Regression: _is_writable used tempfile, which on Windows retries "access denied"
+    up to 2,147,483,647 times, so the installed exe hung at start-up with no window.
+    """
+    calls = []
+
+    def denied(*args, **kwargs):
+        calls.append(args)
+        if len(calls) > 5:   # break a retry loop at once instead of hanging the test run
+            raise RuntimeError("_is_writable keeps retrying after 'access denied'")
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(app_mod.os, "open", denied)
+    assert app_mod._is_writable(tmp_path) is False
+    assert len(calls) == 1
+
+
+def _is_admin() -> bool:
+    """True when the tests run with administrator rights (Program Files is writable then)."""
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return False
+
+
+def _run_isolated(code: str, timeout: float = 20, **env) -> subprocess.CompletedProcess:
+    """Run Python ``code`` in a separate process with a time limit, so a hang fails the
+    test instead of freezing the whole test run."""
+    return subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True,
+                          text=True, timeout=timeout,
+                          env={**os.environ, "QT_QPA_PLATFORM": "offscreen", **env})
+
+
+needs_read_only_program_files = pytest.mark.skipif(
+    os.name != "nt" or _is_admin(),
+    reason="needs Windows without admin rights (C:\\Program Files must be read-only)")
+
+
+@needs_read_only_program_files
+def test_is_writable_real_program_files_returns_at_once():
+    """The real ``C:\\Program Files`` (read-only for normal users) is reported as not
+    writable, quickly. Before the fix this call never returned."""
+    code = ("import os, time; from pathlib import Path; from iceplayer import app; "
+            "t = time.perf_counter(); r = app._is_writable(Path(os.environ['ProgramFiles'])); "
+            "print(r, round(time.perf_counter() - t, 3))")
+    try:
+        result = _run_isolated(code)
+    except subprocess.TimeoutExpired:
+        pytest.fail("_is_writable(C:\\Program Files) hung (the tempfile retry-loop bug is back)")
+    writable, seconds = result.stdout.split()
+    assert writable == "False" and float(seconds) < 1.0, result.stdout + result.stderr
+
+
+@needs_read_only_program_files
+def test_installed_exe_state_file_real_program_files(tmp_path):
+    """Pretend the exe is installed in the real ``C:\\Program Files``: the playlist path
+    is chosen at once and is in %LOCALAPPDATA%\\IcePlayer (pointed to a temp folder),
+    which gets created. This is the exact start-up step that used to hang."""
+    code = ("import os, sys; sys.frozen = True; "
+            "sys.executable = os.path.join(os.environ['ProgramFiles'], 'IcePlayer.exe'); "
+            "from iceplayer import app; print(app.default_state_file())")
+    appdata = tmp_path / "AppData"
+    try:
+        result = _run_isolated(code, LOCALAPPDATA=str(appdata), ICEPLAYER_STATE="")
+    except subprocess.TimeoutExpired:
+        pytest.fail("choosing the playlist file hung for an exe in Program Files")
+    assert result.stdout.strip() == str(appdata / "IcePlayer" / "IceList.json"), result.stderr
+    assert (appdata / "IcePlayer").is_dir()
 
 
 # =============================================================== end-to-end (real program)

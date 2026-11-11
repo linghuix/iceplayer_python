@@ -9,7 +9,7 @@ How the single-instance rule works:
 """
 import os
 import sys
-import tempfile
+import uuid
 from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication
@@ -33,20 +33,31 @@ def _app_dir() -> Path:
 
 
 def _is_writable(folder: Path) -> bool:
-    """Check whether files can be created in a folder (by really creating one).
+    """Check whether files can be created in a folder (by really creating one, once).
+
+    Deliberately not ``tempfile``: on Windows, ``tempfile`` treats "access denied" as
+    "that name is taken" and retries with new names up to ``TMP_MAX`` (2,147,483,647)
+    times, because ``os.access`` wrongly reports Program Files as writable. That made
+    the installed IcePlayer.exe hang at start-up with no window.
 
     Args:
         folder: Folder to test.
 
     Returns:
-        True if a temporary file could be created and removed there; False for
-        read-only places such as ``C:\\Program Files`` without admin rights.
+        True if a uniquely named file could be created and removed there; False for
+        read-only places such as ``C:\\Program Files`` without admin rights, or a
+        folder that doesn't exist. Never retries, so it returns at once.
     """
+    probe = folder / f".iceplayer-write-test-{uuid.uuid4().hex}"
     try:
-        with tempfile.NamedTemporaryFile(dir=folder):
-            return True
+        os.close(os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
     except OSError:
         return False
+    try:
+        probe.unlink()
+    except OSError:
+        pass
+    return True
 
 
 def default_state_file() -> Path:
