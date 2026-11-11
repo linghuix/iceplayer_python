@@ -1,6 +1,6 @@
 # IcePlayer tests
 
-325 automated tests that check every part of the player: lyric files, play modes,
+339 automated tests that check every part of the player: lyric files, play modes,
 the saved playlist, every button and menu, real audio playback (WAV and MP3), the
 mini window, and the real `run.py` launcher. A full run takes about 30 seconds.
 
@@ -17,7 +17,7 @@ conda activate qtapp
 python -m pytest
 ```
 
-You should see a row of dots and finally `325 passed`. Each dot is one passed test;
+You should see a row of dots and finally `339 passed`. Each dot is one passed test;
 `F` is a failure and `E` is an error in the test setup.
 
 ### In VS Code
@@ -52,8 +52,8 @@ You should see a row of dots and finally `325 passed`. Each dot is one passed te
 | `test_widgets.py` | 61 | Every skin image loads, hover buttons, scrolling title, click-to-seek slider, volume popup, dragging the window |
 | `test_player.py` | 111 | The main window: add/remove/clear, dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, progress slider (follows playback, drag to seek, click jumps to the mouse), real-world MP3s (tags, embedded cover, LAME header), lyrics sync, covers, drag & drop, closing |
 | `test_mini.py` | 16 | About box, mini window buttons and menu, keeping it in sync with the main window |
-| `test_app.py` | 12 | Only one player at a time (a second launch hands its file over), where the playlist is saved (source, portable exe, installed exe), the real `run.py` / `python -m iceplayer` |
-| `test_build.py` | 21 | The MSI installer builder: every file and folder inside, product name/version, Start-menu and desktop shortcuts, upgrade/downgrade rules; `build.py` version checks |
+| `test_app.py` | 15 | Only one player at a time (a second launch hands its file over), where the playlist is saved (source, portable exe, installed exe), the real `run.py` / `python -m iceplayer` |
+| `test_build.py` | 32 | The MSI installer builder: every file and folder inside, product name/version, Start-menu and desktop shortcuts, upgrade/downgrade rules, the setup wizard (every dialog, button target and Tab loop exists); `build.py` version checks |
 
 (Counts include every example of a parametrized test. Every file starts with a
 docstring explaining what it tests and how, and every test has a docstring saying

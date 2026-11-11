@@ -55,7 +55,7 @@ python run.py "D:/Music/song.mp3"
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 325 tests, about 35 s
+python -m pytest            # 339 tests, about 40 s
 python -m pytest tests/test_lyrics.py -v    # one file, verbose
 ```
 
@@ -71,7 +71,7 @@ your real `IceList.json` and never talk to a player you have open.
 | `tests/test_player.py` | playlist add/remove/clear, dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, progress slider (follows playback, drag to seek, click jumps to the mouse), real-world MP3s (ID3 tags, embedded cover, LAME header), lyrics sync, cover art, drag & drop, saving on close |
 | `tests/test_mini.py` | about dialog, mini window buttons and menu, syncing with the main window |
 | `tests/test_app.py` | single-instance handoff from a second process, where the playlist is saved, the real `run.py` / `python -m iceplayer` launchers |
-| `tests/test_build.py` | the MSI builder (files, folders, shortcuts, upgrade rules), `build.py` version checks |
+| `tests/test_build.py` | the MSI builder (files, folders, shortcuts, upgrade rules, every wizard dialog and button), `build.py` version checks |
 
 ## Build IcePlayer.exe
 
@@ -96,23 +96,33 @@ doesn't start. In VS Code, **Ctrl+Shift+B** runs it; **Terminal → Run Task… 
 
 `python build.py --msi` also writes `dist/IcePlayer-<version>.msi` (~50 MB), made by
 `msi.py` with Python's built-in `msilib` (needs Windows and Python 3.12 or older,
-i.e. the `qtapp` env; no extra tools). Double-clicking it:
+i.e. the `qtapp` env; no extra tools). Double-clicking it opens a setup wizard:
 
-- installs IcePlayer to `C:\Program Files\IcePlayer` for all users (one admin prompt);
+1. **Welcome** → **Choose the install folder** (default `C:\Program Files\IcePlayer`,
+   can be changed) → **Install** → progress bar → **Setup is complete**, with a
+   ticked **Launch IcePlayer now** box.
+2. Cancel at any step asks "Are you sure?", then shows "Setup was interrupted.
+   Nothing on your computer was changed."
+3. Opening the MSI again while IcePlayer is installed offers **Repair** or **Remove**.
+
+It:
+
+- installs IcePlayer for all users (one admin prompt);
 - adds **IcePlayer** to the Start menu and the desktop;
 - lists IcePlayer, with its icon, in **Settings → Apps**, where it can be uninstalled;
 - replaces an older installed version; refuses to install over a newer one.
 
-The version comes from `__version__` in `iceplayer/__init__.py` (now 2.1.0).
+The version comes from `__version__` in `iceplayer/__init__.py` (now 2.1.1).
 **Raise it for every installer you hand out**, otherwise Windows can't tell the new
 MSI is an upgrade. The installed program keeps its playlist in
 `%LOCALAPPDATA%\IcePlayer\IceList.json`, so it survives upgrades and uninstalling.
 
-Silent install / uninstall (e.g. for scripts), from an admin terminal:
+For scripts only, the wizard can be skipped (silent install / uninstall, from an
+admin terminal):
 
 ```bash
-msiexec /i dist\IcePlayer-2.1.0.msi /qn
-msiexec /x dist\IcePlayer-2.1.0.msi /qn
+msiexec /i dist\IcePlayer-2.1.1.msi /qn
+msiexec /x dist\IcePlayer-2.1.1.msi /qn
 ```
 
 ## Layout

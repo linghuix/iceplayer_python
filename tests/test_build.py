@@ -136,6 +136,135 @@ def test_msi_replaces_existing_output(fake_dist, tmp_path):
     assert props(out)["ProductVersion"] == "1.0.0"
 
 
+# =============================================================== setup wizard (UI)
+# Regression: the first MSI had no dialogs at all, so double-clicking it failed with
+# error 2803 / 2726 ("ExitDialog" not found). These tests check that every screen the
+# installer can show really exists and every button leads somewhere real.
+def _standard_actions():
+    """Names of Windows Installer's built-in actions (from msilib's standard sequences)."""
+    from msilib import sequence
+    names = set()
+    for table in ("AdminExecuteSequence", "AdminUISequence", "AdvtExecuteSequence",
+                  "InstallExecuteSequence", "InstallUISequence"):
+        names |= {row[0] for row in getattr(sequence, table)}
+    return names - {"ExitDialog", "FatalError", "UserExit"}   # these must be real dialogs
+
+
+def _dialogs(path):
+    return {r[0] for r in msi.read_table(path, "Dialog", "`Dialog`")}
+
+
+@pytest.mark.parametrize("table", ["InstallUISequence", "AdminUISequence"])
+def test_every_ui_step_exists(built, table):
+    """Each step of the UI sequences is a dialog in the MSI, a custom action in the MSI,
+    or a built-in Windows Installer action — nothing that would give error 2803/2726."""
+    dialogs = _dialogs(built)
+    actions = {r[0] for r in msi.read_table(built, "CustomAction", "`Action`")}
+    known = dialogs | actions | _standard_actions()
+    missing = [r[0] for r in msi.read_table(built, table, "`Action`") if r[0] not in known]
+    assert missing == [], f"{table} refers to missing dialogs/actions: {missing}"
+
+
+def test_required_dialogs_exist(built):
+    """The dialogs Windows Installer asks for by name are all there: the wizard pages,
+    the end screens, Cancel, the error box and the files-in-use list."""
+    assert {"WelcomeDlg", "InstallDirDlg", "ProgressDlg", "ExitDialog", "MaintenanceDlg",
+            "UserExit", "FatalError", "CancelDlg", "ErrorDlg", "FilesInUse"} <= _dialogs(built)
+    assert props(built)["ErrorDialog"] in _dialogs(built)
+
+
+def test_wizard_order(built):
+    """New install: Welcome first, then Progress; already installed: Repair/Remove first."""
+    seq = {a: (c, s) for a, c, s in
+           msi.read_table(built, "InstallUISequence", "`Action`, `Condition`, `Sequence`")}
+    assert seq["WelcomeDlg"][0] == "NOT Installed"
+    assert seq["MaintenanceDlg"][0].startswith("Installed")
+    assert seq["CostFinalize"][1] < seq["WelcomeDlg"][1] < seq["ProgressDlg"][1] < seq["ExecuteAction"][1]
+    assert [s for a, (c, s) in seq.items() if a == "ExitDialog"] == [-1]
+
+
+def test_every_button_leads_somewhere_real(built):
+    """Buttons that open another screen open a dialog that exists; DoAction runs an
+    action that exists (the "Launch IcePlayer" checkbox starts the installed exe)."""
+    dialogs = _dialogs(built)
+    actions = dict(msi.read_table(built, "CustomAction", "`Action`, `Source`"))
+    for dlg, ctl, event, arg in msi.read_table(
+            built, "ControlEvent", "`Dialog_`, `Control_`, `Event`, `Argument`"):
+        if event in ("NewDialog", "SpawnDialog", "SpawnWaitDialog"):
+            assert arg in dialogs, f"{dlg}.{ctl} opens missing dialog {arg}"
+        if event == "DoAction":
+            assert arg in actions, f"{dlg}.{ctl} runs missing action {arg}"
+    assert actions["LaunchApp"] == "IcePlayer.exe"
+
+
+def test_dialog_focus_default_and_cancel_controls_exist(built):
+    """Each dialog's first-focus, Enter and Esc controls, and every Tab-order link,
+    point to controls on that dialog (a broken link stops the dialog from opening)."""
+    controls = {}
+    for dlg, ctl, nxt in msi.read_table(built, "Control", "`Dialog_`, `Control`, `Control_Next`"):
+        controls.setdefault(dlg, {})[ctl] = nxt
+    for dlg, first, default, cancel in msi.read_table(
+            built, "Dialog", "`Dialog`, `Control_First`, `Control_Default`, `Control_Cancel`"):
+        for ref in (first, default, cancel):
+            assert ref is None or ref in controls[dlg], f"{dlg}: no control {ref}"
+        for ctl, nxt in controls[dlg].items():
+            assert nxt is None or nxt in controls[dlg], f"{dlg}.{ctl}: Tab goes to missing {nxt}"
+
+
+def test_tab_order_is_one_loop_per_dialog(built):
+    """On every dialog, the controls with a Tab target form ONE closed loop and no two
+    controls Tab to the same control.
+
+    Regression: on the install-folder page both the folder box and Cancel Tabbed to
+    Back, and Windows Installer refused to open the page (error 2810, setup failed)."""
+    tabs = {}
+    for dlg, ctl, nxt in msi.read_table(built, "Control", "`Dialog_`, `Control`, `Control_Next`"):
+        if nxt is not None:
+            tabs.setdefault(dlg, {})[ctl] = nxt
+    for dlg, links in tabs.items():
+        targets = list(links.values())
+        assert len(targets) == len(set(targets)), f"{dlg}: two controls Tab to the same control {links}"
+        start = next(iter(links))
+        seen, ctl = [], start
+        while ctl not in seen:
+            seen.append(ctl)
+            ctl = links.get(ctl)
+            assert ctl is not None, f"{dlg}: Tab chain from {start} ends at a control without a Tab target"
+        assert ctl == start and set(seen) == set(links), f"{dlg}: Tab order is not one loop: {links}"
+
+
+def test_no_literal_ampersand_in_labels(built):
+    """Texts drawn without "&" shortcut processing (the NoPrefix attribute) must not
+    contain "&", or it shows up literally (the folder label once read "&Folder:")."""
+    no_prefix = 0x20000
+    bad = [(d, c, t) for d, c, ctype, attr, t in msi.read_table(
+        built, "Control", "`Dialog_`, `Control`, `Type`, `Attributes`, `Text`")
+        if ctype == "Text" and attr & no_prefix and t and "&" in t]
+    assert bad == []
+
+
+def test_error_box_has_error_icon(built):
+    """Windows Installer looks for an "ErrorIcon" control on the error box (log error 2835)."""
+    controls = msi.read_table(built, "Control", "`Dialog_`, `Control`, `Type`")
+    assert ("ErrorDlg", "ErrorIcon", "Icon") in controls
+
+
+def test_fonts_used_by_dialogs_exist(built):
+    """The default font and the heading font named in dialog texts are defined."""
+    styles = {r[0] for r in msi.read_table(built, "TextStyle", "`TextStyle`")}
+    assert props(built)["DefaultUIFont"] in styles
+    texts = " ".join(r[0] or "" for r in msi.read_table(built, "Control", "`Text`"))
+    import re
+    assert set(re.findall(r"\{\\(\w+)\}", texts)) <= styles
+
+
+def test_install_folder_page_edits_installdir(built):
+    """The folder box edits INSTALLDIR (through _BrowseProperty), and Install applies it."""
+    assert props(built)["_BrowseProperty"] == "INSTALLDIR"
+    events = msi.read_table(built, "ControlEvent", "`Dialog_`, `Control_`, `Event`, `Argument`")
+    assert ("InstallDirDlg", "Next", "SetTargetPath", "[_BrowseProperty]") in events
+
+
 # =============================================================== bad input
 def test_msi_requires_the_exe(tmp_path):
     """A folder without IcePlayer.exe (exe not built yet) is refused."""
