@@ -5,6 +5,7 @@
 * ``ScrollingLabel``     label that scrolls (marquee) long song titles.
 * ``SeekSlider``         slider whose knob jumps straight to where you click.
 * ``VolumeButton``       speaker icon with a popup volume slider.
+* ``PlaylistTable``      table that paints its background/stripes with an exact opacity.
 * ``NoFocusDelegate``    hides the dotted focus box on playlist rows.
 * ``DraggableMixin``     lets a frameless window be moved by dragging it.
 * ``SLIDER_STYLE`` / ``MENU_STYLE`` / ``TRANSPARENT_BUTTON``  Qt style sheets.
@@ -12,10 +13,10 @@
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QLabel, QMenu, QPushButton, QSlider, QStyle,
-                               QStyledItemDelegate, QStyleOptionSlider, QWidget,
-                               QWidgetAction)
+                               QStyledItemDelegate, QStyleOptionSlider, QTableWidget,
+                               QWidget, QWidgetAction)
 
 #: Folder holding the skin images (also bundled into the .exe by IcePlayer.spec).
 RES_DIR = Path(__file__).resolve().parent / "resources"
@@ -247,6 +248,65 @@ class VolumeButton(QWidget):
             value: New volume; values outside 0-100 are clamped by the slider.
         """
         self.slider.setValue(value)
+
+
+class PlaylistTable(QTableWidget):
+    """Playlist table that paints its own background, row stripes included, with an
+    exact, explicit opacity.
+
+    Normally the background comes from several layers (widget, scroll area, item
+    brushes, style sheet, system palette); translucent layers stack up and the result
+    depends on the computer's theme and style. Here every background pixel is painted
+    once, with ``CompositionMode_Source`` (it *replaces* what is underneath instead of
+    blending with it), so a row set to alpha 180 really is alpha 180 on screen. Text,
+    selection highlight and focus handling are then drawn normally on top.
+    """
+
+    def __init__(self, rows: int, columns: int, parent=None):
+        """Create the table.
+
+        Args:
+            rows / columns: Initial size (like QTableWidget).
+            parent:         Parent widget.
+        """
+        super().__init__(rows, columns, parent)
+        self._odd = QColor(255, 255, 255)
+        self._even = QColor(255, 255, 255)
+        for widget in (self, self.viewport()):
+            widget.setAutoFillBackground(False)      # only paintEvent paints the background
+            widget.setAttribute(Qt.WA_TranslucentBackground, False)
+
+    def set_row_colors(self, odd: QColor, even: QColor):
+        """Set the background colours (their alpha is the opacity) and repaint.
+
+        Args:
+            odd:  Colour of rows 1, 3, 5... and of the empty area below the last row.
+            even: Colour of rows 0, 2, 4... (the stripes).
+        """
+        self._odd, self._even = QColor(odd), QColor(even)
+        self.viewport().update()
+
+    def row_colors(self) -> tuple[QColor, QColor]:
+        """Returns: ``(odd, even)`` background colours currently used."""
+        return QColor(self._odd), QColor(self._even)
+
+    def paintEvent(self, event):
+        """Qt callback: paint the background exactly once, then the rows' contents.
+
+        Args:
+            event: Paint event; only its rectangle is repainted.
+        """
+        area = event.rect()
+        p = QPainter(self.viewport())
+        p.setCompositionMode(QPainter.CompositionMode_Source)
+        p.fillRect(area, self._odd)                                # empty area + odd rows
+        width = self.viewport().width()
+        for row in range(0, self.rowCount(), 2):                   # even rows: stripes
+            top, height = self.rowViewportPosition(row), self.rowHeight(row)
+            if top + height >= area.top() and top <= area.bottom():
+                p.fillRect(0, top, width, height, self._even)
+        p.end()
+        super().paintEvent(event)                                  # text, selection, focus
 
 
 class NoFocusDelegate(QStyledItemDelegate):

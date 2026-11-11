@@ -24,13 +24,37 @@ from .mini import AboutDialog, MiniWindow
 from .playlist import (AUDIO_EXTENSIONS, MODE_NAMES, PlayMode, is_audio, load_state,
                        next_index, previous_index, save_state)
 from .widgets import (FONT_FAMILY, MENU_STYLE, SLIDER_STYLE, DraggableMixin, IceButton,
-                      NoFocusDelegate, ScrollingLabel, SeekSlider, VolumeButton, pixmap)
+                      NoFocusDelegate, PlaylistTable, ScrollingLabel, SeekSlider, VolumeButton,
+                      pixmap)
 
 SCROLL_THRESHOLD = 28   # titles longer than this marquee-scroll
 TEXT_SPEED = 500        # ms per scroll step
-ROW_EVEN = QColor(213, 228, 242)   # light blue stripe for rows 0, 2, 4...
-ROW_ODD = QColor(255, 255, 255)    # white for rows 1, 3, 5...
 INVALID = "失效"                    # status shown for missing or unplayable files
+
+# --- Playlist colours --------------------------------------------------------------
+# Every colour of the playlist is set explicitly (backgrounds WITH their opacity, and
+# text), so it looks the same on every computer whatever the Windows theme
+# (light/dark mode) or Qt style. Change PLAYLIST_ALPHA to make the list see-through:
+# 255 = fully opaque, 0 = fully transparent. (The whole window additionally has
+# setWindowOpacity(0.9), like the original.)
+PLAYLIST_ALPHA = 255
+ROW_EVEN = QColor(213, 228, 242, PLAYLIST_ALPHA)   # light blue stripe for rows 0, 2, 4...
+ROW_ODD = QColor(255, 255, 255, PLAYLIST_ALPHA)    # white for rows 1, 3, 5... and empty area
+PLAYLIST_TEXT = QColor(0, 0, 0)                    # song names
+INVALID_TEXT = QColor(200, 80, 80)                 # the 失效 marker
+SELECTION_BG = QColor(159, 210, 255)               # selected row (#9fd2ff)
+
+
+def _with_alpha(color: QColor, alpha: int) -> QColor:
+    """Copy of ``color`` with opacity ``alpha`` (0-255)."""
+    c = QColor(color)
+    c.setAlpha(alpha)
+    return c
+
+
+def _css(color: QColor) -> str:
+    """``color`` as a style-sheet value with its opacity, e.g. ``rgba(255, 255, 255, 255)``."""
+    return f"rgba({color.red()}, {color.green()}, {color.blue()}, {color.alpha()})"
 
 
 def fmt_ms(ms: int) -> str:
@@ -199,7 +223,7 @@ class IcePlayer(DraggableMixin, QWidget):
         self.close_button.clicked.connect(self.close)
         self.logo_button.clicked.connect(lambda: self.about_dialog.show())
 
-        self.table = QTableWidget(0, 2, self)
+        self.table = PlaylistTable(0, 2, self)   # paints its own background (see set_playlist_alpha)
         self.table.setGeometry(25, 240, 350, 320)
         self.table.setItemDelegate(NoFocusDelegate(self.table))
         self.table.setColumnWidth(0, 300)
@@ -217,14 +241,53 @@ class IcePlayer(DraggableMixin, QWidget):
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_menu)
         self.table.cellDoubleClicked.connect(lambda row, _col: self.play_index(row))
+        self.set_playlist_alpha(PLAYLIST_ALPHA)
+
+        QShortcut(QKeySequence(Qt.Key_Space), self, self.toggle_play)
+
+    def set_playlist_alpha(self, alpha: int):
+        """Fix the playlist's colours and background opacity explicitly.
+
+        Nothing is left to the system palette or Qt style, which differ between
+        computers (e.g. Windows dark mode makes the default text light and the
+        background dark or see-through):
+
+        * the background (empty area and row stripes) is painted once by
+          ``PlaylistTable`` with exactly this opacity — no other layer (widget fill,
+          style sheet, row brushes) paints under or over it, so opacities can't stack;
+        * all palette groups (active, inactive, disabled) get the same text and
+          selection colours, and the style sheet repeats them;
+        * every row gets an explicit text colour (black; 失效 in red).
+
+        Args:
+            alpha: Background opacity, 0 (transparent) to 255 (opaque). Applies to the
+                   empty area and every row; text and the selected row stay opaque.
+        """
+        alpha = max(0, min(255, int(alpha)))
+        self.playlist_alpha = alpha
+        self.table.set_row_colors(_with_alpha(ROW_ODD, alpha), _with_alpha(ROW_EVEN, alpha))
+
+        pal = QPalette(self.table.palette())
+        for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+            for role, color in ((QPalette.Base, Qt.transparent), (QPalette.Window, Qt.transparent),
+                                (QPalette.AlternateBase, Qt.transparent),
+                                (QPalette.Text, PLAYLIST_TEXT), (QPalette.WindowText, PLAYLIST_TEXT),
+                                (QPalette.Highlight, SELECTION_BG),
+                                (QPalette.HighlightedText, PLAYLIST_TEXT)):
+                pal.setColor(group, role, QColor(color))
+        self.table.setPalette(pal)
+        self.table.viewport().setPalette(pal)
+
         self.table.setStyleSheet(
-            "QTableWidget{background:white;selection-background-color:#9fd2ff;selection-color:black;}"
+            # background: transparent — PlaylistTable.paintEvent paints it (exact opacity)
+            f"QTableWidget{{background-color:transparent;color:{_css(PLAYLIST_TEXT)};"
+            f"selection-background-color:{_css(SELECTION_BG)};selection-color:{_css(PLAYLIST_TEXT)};"
+            "border:none;}"
             "QScrollBar{background:transparent;width:5px;}"
             "QScrollBar::handle{background:lightgray;border-radius:2px;}"
             "QScrollBar::handle:hover{background:gray;}"
             "QScrollBar::sub-line,QScrollBar::add-line{background:transparent;height:0px;}")
-
-        QShortcut(QKeySequence(Qt.Key_Space), self, self.toggle_play)
+        self._color_table()
 
     def _init_menus(self):
         """Create the play-mode menu (4 checkable items, one ticked at a time) and the
@@ -261,8 +324,7 @@ class IcePlayer(DraggableMixin, QWidget):
             for col, text in enumerate((Path(path).stem, "" if Path(path).exists() else INVALID)):
                 item = QTableWidgetItem(text)
                 item.setFont(QFont(FONT_FAMILY, 10))
-                if col == 1:
-                    item.setForeground(QColor(200, 80, 80))
+                item.setForeground(INVALID_TEXT if col == 1 else PLAYLIST_TEXT)
                 self.table.setItem(row, col, item)
         self._color_table()
         if save:
@@ -343,13 +405,13 @@ class IcePlayer(DraggableMixin, QWidget):
         self.table_menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def _color_table(self):
-        """Repaint the row stripes (blue/white) and make the playing row bold."""
+        """Make the playing row bold (the row stripes are painted by PlaylistTable, so
+        rows get no background brush of their own that could stack on top)."""
         for row in range(self.table.rowCount()):
             playing = row == self.current_index
             for col in range(self.table.columnCount()):
                 item = self.table.item(row, col)
                 if item:
-                    item.setBackground(ROW_EVEN if row % 2 == 0 else ROW_ODD)
                     font = item.font()
                     font.setBold(playing)
                     item.setFont(font)

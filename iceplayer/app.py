@@ -12,7 +12,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtCore import QCoreApplication, Qt
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication
@@ -166,6 +166,27 @@ def start_server(player: IcePlayer) -> QLocalServer:
     return server
 
 
+def use_light_colors(app: QApplication) -> bool:
+    """Make the whole app use light colours, even when Windows is in dark mode.
+
+    Qt 6 follows the Windows light/dark setting by default, so on a computer in dark
+    mode the playlist, menus and dialogs got light text and dark or see-through
+    backgrounds. The skin is designed for light colours only.
+
+    Args:
+        app: The running QApplication.
+
+    Returns:
+        True if the light scheme was set (Qt 6.8+), False on older Qt (the playlist's
+        own explicit colours still apply then).
+    """
+    hints = app.styleHints()
+    if hasattr(hints, "setColorScheme"):
+        hints.setColorScheme(Qt.ColorScheme.Light)
+        return True
+    return False
+
+
 def main() -> int:
     """Start IcePlayer.
 
@@ -179,6 +200,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationDisplayName("冰点播放器")
     app.setStyle("Fusion")  # flat table rows like the original, not the rounded Win11 style
+    use_light_colors(app)
     app.setFont(QFont(FONT_FAMILY, 9))
     icon = QIcon()
     for size in (16, 32, 48):

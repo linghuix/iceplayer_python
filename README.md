@@ -29,6 +29,12 @@ python run.py "D:/Music/song.mp3"
 - Playlist: double-click to play, right-click to add songs or a folder, remove one
   song or all. Drag files or folders onto the window. Missing files show "失效".
   Supports mp3, flac, wav, ogg, m4a, aac, wma, opus.
+- Same look on every computer: the playlist's colours (blue/white stripes, black
+  text, light-blue selection) and its background opacity are set in code, not taken
+  from the Windows theme, and the app always uses light colours even when Windows is
+  in dark mode. Make the list see-through by changing `PLAYLIST_ALPHA` in
+  `iceplayer/player.py` (255 = solid, the default; 0 = invisible). As in the
+  original, the whole window is 90% opaque on top of that (`setWindowOpacity(0.9)`).
 - Desktop lyrics: an always-on-top bar that reads `song.lrc` next to the song file.
   UTF-8, UTF-16 and GBK files are all supported. Right-click the bar to hide it.
 - Cover art comes from `song.jpg` next to the song, then from art embedded in the
@@ -55,7 +61,7 @@ python run.py "D:/Music/song.mp3"
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 339 tests, about 40 s
+python -m pytest            # 350 tests, about 40 s
 python -m pytest tests/test_lyrics.py -v    # one file, verbose
 ```
 
@@ -112,7 +118,7 @@ It:
 - lists IcePlayer, with its icon, in **Settings → Apps**, where it can be uninstalled;
 - replaces an older installed version; refuses to install over a newer one.
 
-The version comes from `__version__` in `iceplayer/__init__.py` (now 2.1.1).
+The version comes from `__version__` in `iceplayer/__init__.py` (now 2.1.2).
 **Raise it for every installer you hand out**, otherwise Windows can't tell the new
 MSI is an upgrade. The installed program keeps its playlist in
 `%LOCALAPPDATA%\IcePlayer\IceList.json`, so it survives upgrades and uninstalling.
@@ -121,8 +127,8 @@ For scripts only, the wizard can be skipped (silent install / uninstall, from an
 admin terminal):
 
 ```bash
-msiexec /i dist\IcePlayer-2.1.1.msi /qn
-msiexec /x dist\IcePlayer-2.1.1.msi /qn
+msiexec /i dist\IcePlayer-2.1.2.msi /qn
+msiexec /x dist\IcePlayer-2.1.2.msi /qn
 ```
 
 ## Layout

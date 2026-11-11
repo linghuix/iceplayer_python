@@ -46,7 +46,7 @@ from unittest.mock import patch
 
 import pytest
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QMouseEvent, QPixmap, QShortcut
+from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent, QMouseEvent, QPixmap, QShortcut
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import QApplication, QSlider, QStyle, QStyleOptionSlider
 
@@ -155,11 +155,31 @@ def test_add_files_no_save(player, songs):
     assert not player.state_file.exists()
 
 
+def row_pixel(p, row):
+    """The colour actually drawn in the middle of a playlist row (right of the text),
+    as (r, g, b, alpha)."""
+    rect = p.table.visualItemRect(p.table.item(row, 0))
+    c = p.table.grab().toImage().pixelColor(rect.x() + 280, rect.center().y())
+    return c.red(), c.green(), c.blue(), c.alpha()
+
+
+def empty_pixel(p):
+    """The colour drawn in the empty area below the last row, as (r, g, b, alpha)."""
+    c = p.table.grab().toImage().pixelColor(100, p.table.viewport().height() - 10)
+    return c.red(), c.green(), c.blue(), c.alpha()
+
+
+def rgba(color):
+    return color.red(), color.green(), color.blue(), color.alpha()
+
+
 def test_rows_alternate_colours(player, songs):
-    """Rows are striped: light blue, white, light blue (like the original)."""
+    """Rows are striped as drawn on screen: light blue, white, light blue (like the
+    original), and the empty area below is white — all fully opaque by default."""
     player.add_files(songs)
-    colours = [player.table.item(r, 0).background().color() for r in range(3)]
-    assert colours == [ROW_EVEN, ROW_ODD, ROW_EVEN]
+    assert [row_pixel(player, r) for r in range(3)] == [rgba(ROW_EVEN), rgba(ROW_ODD), rgba(ROW_EVEN)]
+    assert empty_pixel(player) == rgba(ROW_ODD)
+    assert ROW_EVEN.alpha() == ROW_ODD.alpha() == player_mod.PLAYLIST_ALPHA == 255
 
 
 def test_remove_row_before_current(player, songs):
@@ -201,8 +221,96 @@ def test_remove_row_updates_colours_and_state(player, songs):
     """After removing, stripes are recomputed and the file is saved with 2 songs."""
     player.add_files(songs)
     player.remove_row(0)
-    assert player.table.item(0, 0).background().color() == ROW_EVEN
+    assert row_pixel(player, 0) == rgba(ROW_EVEN)     # the new first row is blue again
+    assert row_pixel(player, 1) == rgba(ROW_ODD)
     assert len(json.loads(player.state_file.read_text(encoding="utf-8"))["files"]) == 2
+
+
+# --- Explicit playlist colours / opacity ---------------------------------------
+# On another computer the playlist looked see-through with grey text (Windows dark
+# mode / different style). Every colour and the background opacity are now fixed in
+# code: PlaylistTable paints the background once with an exact alpha.
+@pytest.mark.parametrize("alpha", [0, 64, 128, 180, 255])
+def test_playlist_opacity_is_exact(player, songs, alpha):
+    """``set_playlist_alpha(a)`` makes stripes, white rows and the empty area exactly
+    alpha ``a`` on screen — layers don't stack up into a more opaque result.
+
+    The colour channels may differ by a couple of units at low alpha: Qt stores
+    translucent pixels premultiplied (colour × alpha), so reading them back rounds."""
+    player.add_files(songs)
+    player.set_playlist_alpha(alpha)
+
+    def close(actual, expected_rgb):
+        return actual[3] == alpha and (alpha == 0 or all(
+            abs(a - e) <= 3 for a, e in zip(actual[:3], expected_rgb)))
+
+    assert close(row_pixel(player, 0), rgba(ROW_EVEN)[:3]), row_pixel(player, 0)
+    assert close(row_pixel(player, 1), rgba(ROW_ODD)[:3]), row_pixel(player, 1)
+    assert close(empty_pixel(player), rgba(ROW_ODD)[:3]), empty_pixel(player)
+    assert player.playlist_alpha == alpha
+
+
+@pytest.mark.parametrize("value, expected", [(-20, 0), (300, 255)])
+def test_playlist_opacity_is_clamped(player, value, expected):
+    """Out-of-range opacities are limited to 0..255."""
+    player.set_playlist_alpha(value)
+    assert player.playlist_alpha == expected
+
+
+def test_playlist_ignores_dark_system_palette(qapp, tmp_path, songs, monkeypatch):
+    """With a dark-mode application palette (dark backgrounds, white text — what
+    Windows dark mode gives a Qt app), the playlist still draws blue/white opaque rows
+    and black text."""
+    from types import SimpleNamespace
+    from PySide6.QtGui import QPalette
+    monkeypatch.setattr(player_mod, "QApplication", SimpleNamespace(quit=lambda: None))
+    saved = qapp.palette()
+    dark = QPalette()
+    for role, name in ((QPalette.Window, "#202020"), (QPalette.Base, "#1e1e1e"),
+                       (QPalette.AlternateBase, "#2d2d2d"), (QPalette.Text, "#ffffff"),
+                       (QPalette.WindowText, "#ffffff"), (QPalette.Highlight, "#0078d4"),
+                       (QPalette.HighlightedText, "#ffffff")):
+        dark.setColor(role, QColor(name))
+    qapp.setPalette(dark)
+    try:
+        p = IcePlayer(tmp_path / "s.json")
+        p.add_files(songs)
+        p.show()
+        process(50)
+        assert row_pixel(p, 0) == rgba(ROW_EVEN) and row_pixel(p, 1) == rgba(ROW_ODD)
+        assert empty_pixel(p) == rgba(ROW_ODD)
+        assert p.table.palette().color(QPalette.Text) == player_mod.PLAYLIST_TEXT
+        assert p.table.item(0, 0).foreground().color() == player_mod.PLAYLIST_TEXT
+        p.close()
+        p.deleteLater()
+    finally:
+        qapp.setPalette(saved)
+
+
+def test_playlist_text_colours_are_explicit(player, songs, tmp_path):
+    """Song names are black and the 失效 marker red, set on every row (not taken from
+    the system palette)."""
+    player.add_files(songs + [str(tmp_path / "gone.mp3")])
+    for row in range(4):
+        assert player.table.item(row, 0).foreground().color() == player_mod.PLAYLIST_TEXT
+        assert player.table.item(row, 1).foreground().color() == player_mod.INVALID_TEXT
+
+
+def test_selected_row_stays_opaque(player, songs):
+    """Even with a see-through playlist, the selected row is drawn in solid light blue."""
+    player.add_files(songs)
+    player.set_playlist_alpha(100)
+    player.show()
+    player.table.selectRow(1)
+    process(50)
+    assert row_pixel(player, 1) == rgba(player_mod.SELECTION_BG)
+
+
+def test_app_forces_light_colours(qapp):
+    """``use_light_colors`` switches the app to the light scheme (Qt 6.8+), so Windows
+    dark mode can't restyle menus, dialogs or the playlist."""
+    from iceplayer.app import use_light_colors
+    assert use_light_colors(qapp) is True
 
 
 def test_clear_list(player, songs):
