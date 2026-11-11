@@ -47,7 +47,7 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent, QPixmap, QShortcut
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import QSlider
 
-from conftest import make_wav, process, wait_until
+from conftest import make_jpeg, make_mp3, make_wav, process, wait_until
 from iceplayer import player as player_mod
 from iceplayer.player import INVALID, ROW_EVEN, ROW_ODD, IcePlayer, fmt_ms
 from iceplayer.playlist import PlayMode
@@ -632,6 +632,92 @@ def test_slider_drag_action_does_not_seek_immediately(player):
         player._on_slider_click(QSlider.SliderMove)
         process(30)
     set_pos.assert_not_called()
+
+
+# =============================================================== 8b. real-world MP3 files
+# The other tests use WAV files. Real music libraries are mostly MP3s with ID3 tags,
+# an embedded cover picture and a LAME "Info" header, built here by conftest.make_mp3
+# (silent audio, no encoder needed).
+#
+# Regression: on Qt/PySide6 6.8.3, an MP3 with BOTH an embedded cover and a LAME
+# header "played" forever at 0:00 with no sound (reported with a real song whose
+# FFmpeg log showed "Stream #0:1: Video: mjpeg (attached pic)" and "Could not update
+# timestamps for skipped samples"). Fixed by upgrading to PySide6 6.10.2.
+def _wait_position(player, ms=500, timeout_ms=5000):
+    """Wait until playback has really moved past ``ms`` milliseconds."""
+    return wait_until(lambda: player.media.position() > ms, timeout_ms)
+
+
+@pytest.fixture
+def tagged_mp3(music_dir):
+    """An MP3 like a typical store/iTunes file: ID3 title/artist/album, a 64x48 JPEG
+    front cover and a LAME header (encoder delay 576 samples). 3 seconds long."""
+    return str(make_mp3(music_dir / "Hacking test.mp3", 3, title="Test Song Title",
+                        artist="テスト歌手", album="测试专辑",
+                        cover=make_jpeg(64, 48), lame_header=True))
+
+
+def test_mp3_with_cover_and_lame_header_plays(player, tagged_mp3):
+    """The reported bug: an MP3 with an embedded cover AND a LAME header must actually
+    play — the position moves and the time label leaves 00:00.
+
+    If this fails with the position stuck at 0, the PySide6/Qt version has the
+    Qt 6.8 FFmpeg bug: install the version from requirements.txt.
+    """
+    player.add_files([tagged_mp3])
+    assert player.play_index(0)
+    assert _wait_position(player), (
+        "position stuck at 0: this Qt version can't play MP3s with cover art + LAME header")
+    assert player.time_label.text() != "00:00" or player.media.position() < 1000
+    assert player.is_playing()
+
+
+def test_mp3_with_cover_reaches_the_end(player, tagged_mp3):
+    """The same file plays to its end (3 s), so 单曲播放 stops and the Play button returns."""
+    player.add_files([tagged_mp3])
+    player.play_index(0)
+    assert wait_until(lambda: player.media.mediaStatus() == QMediaPlayer.EndOfMedia, 10000)
+    assert player.media.duration() >= 2900
+    assert player.play_button.isVisibleTo(player)
+
+
+@pytest.mark.parametrize("cover, lame", [(False, False), (True, False), (False, True)],
+                         ids=["plain", "cover-only", "lame-only"])
+def test_other_mp3_variants_play(player, music_dir, cover, lame):
+    """MP3s without a cover, with only a cover, or with only a LAME header all play."""
+    song = make_mp3(music_dir / "variant.mp3", 2, title="v",
+                    cover=make_jpeg() if cover else None, lame_header=lame)
+    player.add_files([str(song)])
+    player.play_index(0)
+    assert _wait_position(player)
+
+
+def test_mp3_tags_are_shown(player, tagged_mp3):
+    """Title, artist and album come from the ID3 tags (including Japanese/Chinese text),
+    not from the file name."""
+    player.add_files([tagged_mp3])
+    player.play_index(0)
+    assert wait_until(lambda: player.name_label.text() == "Test Song Title")
+    assert player.artist_label.text() == "テスト歌手"
+    assert player.album_label.text() == "测试专辑"
+    assert player.lyric_window.text() == "Test Song Title"   # no .lrc: the bar shows the title
+
+
+def test_mp3_embedded_cover_is_shown(player, tagged_mp3):
+    """The cover stored inside the MP3 (64x48) replaces the default album picture."""
+    player.add_files([tagged_mp3])
+    player.play_index(0)
+    assert wait_until(lambda: player.cover.pixmap().size().toTuple() == (64, 48)), \
+        f"cover is {player.cover.pixmap().size().toTuple()}, expected the embedded 64x48 image"
+
+
+def test_jpg_next_to_mp3_wins_over_embedded_cover(player, tagged_mp3):
+    """A ``song.jpg`` beside the MP3 is used instead of the embedded cover."""
+    QPixmap(37, 41).save(str(Path(tagged_mp3).with_suffix(".jpg")), "JPG")
+    player.add_files([tagged_mp3])
+    player.play_index(0)
+    assert wait_until(lambda: player.name_label.text() == "Test Song Title")   # tags have arrived
+    assert player.cover.pixmap().size().toTuple() == (37, 41)
 
 
 # =============================================================== 9. song info / lyrics / cover

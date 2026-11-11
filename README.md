@@ -11,10 +11,13 @@ python run.py                 # or: python -m iceplayer
 python run.py "D:/Music/song.mp3"
 ```
 
-> If `import PySide6` fails with *"DLL load failed while importing QtCore"* on a
-> Miniconda/Anaconda Python, the Qt build is newer than the MSVC runtime that ships
-> with that Python. Install an older Qt build instead: `pip install "PySide6==6.8.3"`
-> (or update the runtime with `conda update vc14_runtime`).
+> Use PySide6 **6.10.2** (pinned in `requirements.txt`; the `qtapp` conda env has it).
+>
+> - **Not 6.8.x:** it can't play MP3s that have both an embedded cover picture and a
+>   LAME header, which describes most store/iTunes files. The song "plays" at 0:00
+>   with no sound.
+> - **Not 6.12 on Miniconda base:** it fails with *"DLL load failed while importing
+>   QtCore"* because that Python's MSVC runtime is too old.
 
 ## Features
 
@@ -49,7 +52,7 @@ python run.py "D:/Music/song.mp3"
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # ~270 tests, about 25 s
+python -m pytest            # 281 tests, about 30 s
 python -m pytest tests/test_lyrics.py -v    # one file, verbose
 ```
 
@@ -62,7 +65,7 @@ your real `IceList.json` and never talk to a player you have open.
 | `tests/test_lyrics.py` | LRC encoding detection, time-tag parsing, lyric lookup, desktop lyric window |
 | `tests/test_playlist.py` | audio file types, next/previous for every play mode, saving/loading state |
 | `tests/test_widgets.py` | every skin image, hover buttons, scrolling title, volume popup, window dragging |
-| `tests/test_player.py` | playlist add/remove/clear, dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, seeking, lyrics sync, cover art, drag & drop, saving on close |
+| `tests/test_player.py` | playlist add/remove/clear, dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, seeking, real-world MP3s (ID3 tags, embedded cover, LAME header), lyrics sync, cover art, drag & drop, saving on close |
 | `tests/test_mini.py` | about dialog, mini window buttons and menu, syncing with the main window |
 | `tests/test_app.py` | single-instance handoff from a second process, the real `run.py` / `python -m iceplayer` launchers |
 

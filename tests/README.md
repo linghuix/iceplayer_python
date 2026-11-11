@@ -1,13 +1,13 @@
 # IcePlayer tests
 
-273 automated tests that check every part of the player: lyric files, play modes,
-the saved playlist, every button and menu, real audio playback, the mini window,
-and the real `run.py` launcher. A full run takes about 25 seconds.
+281 automated tests that check every part of the player: lyric files, play modes,
+the saved playlist, every button and menu, real audio playback (WAV and MP3), the
+mini window, and the real `run.py` launcher. A full run takes about 30 seconds.
 
 ## How to run
 
 All commands are run from the `iceplayer_py` folder, using the `qtapp` conda
-environment (it has PySide6 6.8.3 and pytest installed):
+environment (it has PySide6 6.10.2 and pytest installed):
 
 ```bash
 conda activate qtapp
@@ -17,7 +17,7 @@ conda activate qtapp
 python -m pytest
 ```
 
-You should see a row of dots and finally `273 passed`. Each dot is one passed test;
+You should see a row of dots and finally `281 passed`. Each dot is one passed test;
 `F` is a failure and `E` is an error in the test setup.
 
 ### In VS Code
@@ -50,7 +50,7 @@ You should see a row of dots and finally `273 passed`. Each dot is one passed te
 | `test_lyrics.py` | 45 | Lyric file encodings (UTF-8/UTF-16/GBK), `[mm:ss.xx]` time tags, which line shows when, the desktop lyric bar |
 | `test_playlist.py` | 59 | Which files are music, next/previous in all 4 play modes, saving and loading `IceList.json`, double-clicking a playlist row to play it |
 | `test_widgets.py` | 53 | Every skin image loads, hover buttons, scrolling title, volume popup, dragging the window |
-| `test_player.py` | 92 | The main window: add/remove/clear, dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, seeking, lyrics sync, covers, drag & drop, closing |
+| `test_player.py` | 100 | The main window: add/remove/clear, dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, seeking, real-world MP3s (tags, embedded cover, LAME header), lyrics sync, covers, drag & drop, closing |
 | `test_mini.py` | 16 | About box, mini window buttons and menu, keeping it in sync with the main window |
 | `test_app.py` | 8 | Only one player at a time (a second launch hands its file over), the real `run.py` / `python -m iceplayer` |
 

@@ -1,3 +1,7 @@
-# 6.8.3 is the tested version. 6.12 fails to load ("DLL load failed") on Miniconda Pythons
-# whose bundled MSVC runtime is older than that Qt build needs.
-PySide6==6.8.3
+# 6.10.2 is the tested version.
+# - 6.8.x cannot play MP3s that have BOTH an embedded cover picture and a LAME header
+#   (most store/iTunes files): playback sits at 0:00 with no sound. Fixed in 6.9+.
+#   tests/test_player.py::test_mp3_with_cover_and_lame_header_plays checks this.
+# - 6.12 fails to load ("DLL load failed") on Pythons whose bundled MSVC runtime is
+#   older than that Qt build needs (e.g. Miniconda base).
+PySide6==6.10.2
