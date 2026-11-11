@@ -37,6 +37,9 @@ INVALID = "失效"                    # status shown for missing or unplayable f
 LYRIC_SEARCHING = "正在搜索歌词…"
 LYRIC_NOT_FOUND = "没有找到歌词"
 LYRIC_FAILED = "歌词搜索失败，请检查网络"
+# Song changed while the lyric bar is open: search once its tags (title/artist) are
+# read, or after this many ms if they never arrive.
+AUTO_LYRIC_WAIT_MS = 2000
 
 # --- Playlist colours --------------------------------------------------------------
 # Every colour of the playlist is set explicitly (backgrounds WITH their opacity, and
@@ -150,6 +153,9 @@ class IcePlayer(DraggableMixin, QWidget):
         self._lyric_message_shown = False  # lyric bar shows a search message, not the title
         self.lyric_search = LyricSearch(self)
         self.lyric_search.finished.connect(self._on_online_lyrics)
+        self._auto_lyric_pending = False   # new song + open lyric bar: search when tags arrive
+        self._auto_lyric_timer = QTimer(self, singleShot=True, interval=AUTO_LYRIC_WAIT_MS)
+        self._auto_lyric_timer.timeout.connect(self._auto_search_lyrics)
         self._background = pixmap("background.png")
         self._default_cover = pixmap("default_album.jpg")
 
@@ -706,6 +712,7 @@ class IcePlayer(DraggableMixin, QWidget):
                 if image is not None and hasattr(image, "isNull") and not image.isNull():
                     self.cover.setPixmap(QPixmap.fromImage(image))
                     break
+        self._auto_search_lyrics()      # tags known now: search if a song change asked to
 
     def _load_song_extras(self, path: str):
         """Load the lyrics and cover stored next to a song and show its file name until
@@ -714,6 +721,10 @@ class IcePlayer(DraggableMixin, QWidget):
         Args:
             path: Song path; reads ``song.lrc`` and ``song.jpg`` from the same folder
                   (default cover if there is no .jpg).
+
+        If the lyric bar is open and the song has no lyric file, the lyrics are
+        searched online automatically, once the tags are read (``_on_metadata``) or
+        after ``AUTO_LYRIC_WAIT_MS`` (``_auto_search_lyrics``).
         """
         self.lyrics = Lyrics(load_lrc_for(path))
         self._tag_title = self._tag_artist = ""
@@ -725,6 +736,31 @@ class IcePlayer(DraggableMixin, QWidget):
         self.lyric_window.set_text(Path(path).stem)
         cover = QPixmap(str(Path(path).with_suffix(".jpg")))
         self.cover.setPixmap(cover if not cover.isNull() else self._default_cover)
+        self._auto_lyric_pending = False
+        self._auto_lyric_timer.stop()
+        if self.lyric_window.isVisible():
+            if self.lyrics:
+                log.info("[歌词] 换歌: %s，已有歌词文件 %s", Path(path).name,
+                         Path(path).with_suffix(".lrc").name)
+            else:
+                log.info("[歌词] 换歌: %s，歌词栏开着但没有歌词文件，读取标签后在线搜索",
+                         Path(path).name)
+                self._auto_lyric_pending = True
+                self._auto_lyric_timer.start()
+
+    def _auto_search_lyrics(self):
+        """Run the online search a song change asked for (see ``_load_song_extras``).
+
+        Called when the tags arrive and by the backup timer; whichever comes first
+        searches, the other does nothing. Nothing happens if the lyric bar was closed
+        in the meantime.
+        """
+        if not self._auto_lyric_pending:
+            return
+        self._auto_lyric_pending = False
+        self._auto_lyric_timer.stop()
+        if self.lyric_window.isVisible():
+            self.search_online_lyrics()
 
     def _set_title(self, title: str):
         """Show the song title; titles longer than 28 characters scroll.
@@ -752,6 +788,8 @@ class IcePlayer(DraggableMixin, QWidget):
         self.lyrics = Lyrics()
         self._tag_title = self._tag_artist = ""
         self._lyric_message_shown = False
+        self._auto_lyric_pending = False
+        self._auto_lyric_timer.stop()
         self.lyric_window.set_text("冰点播放器")
 
     # ---------------------------------------------------------- windows etc.

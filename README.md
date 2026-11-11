@@ -51,6 +51,9 @@ python run.py "D:/Music/song.mp3"
   If title + artist find nothing (e.g. the tag says "Jay Chou" but lrclib has
   周杰伦), it searches again by title only, and then accepts only versions within
   10 s of the song's length, so a different song with the same name isn't used.
+  While the bar is open, every song change (next/previous, double-click, end of
+  song) checks again: a song without `.lrc` is searched automatically once its
+  tags are read (or after 2 s if it has none).
   The version whose length matches the song is used and saved as `song.lrc` next to
   it, so later plays work offline. The bar shows 正在搜索歌词… meanwhile, then
   没有找到歌词 (not searched again for that song) or 歌词搜索失败，请检查网络 (tried
@@ -83,7 +86,7 @@ python run.py "D:/Music/song.mp3"
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 401 tests, about 50 s
+python -m pytest            # 408 tests, about 75 s
 python -m pytest tests/test_lyrics.py -v    # one file, verbose
 ```
 
