@@ -619,8 +619,11 @@ def test_switch_song_after_paused_seek(player, songs):
 
 
 def test_click_on_slider_groove_seeks(player):
-    """Regression: clicking the empty part of the progress bar must seek (it used to do
-    nothing because the slider action arrived as a plain int)."""
+    """A page step (Page Up / Page Down keys) seeks at once by 1/10 of the song.
+
+    Regression: page steps used to do nothing because the slider action arrives as a
+    plain int. (Mouse clicks now jump straight to the mouse instead; see the
+    ``test_click_on_bar_*`` tests below.)"""
     player._on_duration(10000)
     with patch.object(player.media, "setPosition") as set_pos:
         player.progress.triggerAction(QSlider.SliderPageStepAdd)
@@ -738,18 +741,76 @@ def test_drag_handle_with_mouse_seeks_on_release(player, music_dir):
     assert wait_until(player.is_playing), "playback did not resume after the drag"
 
 
-def test_click_on_empty_bar_with_mouse_jumps_forward(player, music_dir):
-    """A real mouse click on the bar to the right of the knob jumps playback forward
-    (by 1/10 of the song, or straight to the click, depending on the Qt style)."""
+def _click_bar(player, value):
+    """Left-click (press + release) the progress bar at the spot that stands for ``value`` ms."""
+    slider = player.progress
+    _, handle = _slider_rects(slider)
+    spot = QPoint(_x_for_value(slider, value), handle.center().y())
+    _mouse(slider, QEvent.MouseButtonPress, spot, Qt.LeftButton)
+    _mouse(slider, QEvent.MouseButtonRelease, spot, Qt.NoButton)
+
+
+def test_click_on_bar_jumps_to_mouse_position(player, music_dir):
+    """Clicking the bar at the 4 s spot of a 5 s song jumps playback straight to ~4 s
+    (not just 1/10 of the song toward it), and resumes the paused song."""
+    _pause_at_start(player, make_wav(music_dir / "five_seconds.wav", 5.0))
+    _click_bar(player, 4000)
+    assert abs(player.progress.value() - 4000) < 250, f"knob at {player.progress.value()}"
+    assert wait_until(lambda: abs(player.media.position() - 4000) < 300), \
+        f"position {player.media.position()}, expected ~4000"
+    assert wait_until(player.is_playing), "playback did not resume after the click"
+
+
+def test_click_on_bar_left_of_knob_jumps_back(player, music_dir):
+    """With the knob at ~4 s, clicking the 1 s spot jumps back to ~1 s."""
+    _pause_at_start(player, make_wav(music_dir / "five_seconds.wav", 5.0))
+    player.media.setPosition(4000)
+    assert wait_until(lambda: player.progress.value() >= 3900)
+    _click_bar(player, 1000)
+    assert wait_until(lambda: abs(player.media.position() - 1000) < 300), \
+        f"position {player.media.position()}, expected ~1000"
+
+
+@pytest.mark.parametrize("value", [500, 2500, 4500])
+def test_click_on_bar_anywhere(player, music_dir, value):
+    """Clicks near the start, middle and end of the bar each land where clicked."""
+    _pause_at_start(player, make_wav(music_dir / "five_seconds.wav", 5.0))
+    _click_bar(player, value)
+    assert wait_until(lambda: abs(player.media.position() - value) < 300), \
+        f"clicked {value}, position {player.media.position()}"
+
+
+def test_click_then_drag_continues_from_click_point(player, music_dir):
+    """Press on the bar at 2 s (the knob jumps there and is grabbed), keep the button
+    down and drag to 3 s, release: playback ends up at ~3 s, and doesn't move while
+    the button is still held."""
     _pause_at_start(player, make_wav(music_dir / "five_seconds.wav", 5.0))
     slider = player.progress
     start = player.media.position()
-    groove, _ = _slider_rects(slider)
-    spot = QPoint(groove.right() - 5, groove.center().y())
-    _mouse(slider, QEvent.MouseButtonPress, spot, Qt.LeftButton)
-    _mouse(slider, QEvent.MouseButtonRelease, spot, Qt.NoButton)
-    assert wait_until(lambda: player.media.position() >= start + 450, 3000), \
-        f"position {player.media.position()} did not jump forward from {start}"
+    y = _slider_rects(slider)[1].center().y()
+    _mouse(slider, QEvent.MouseButtonPress, QPoint(_x_for_value(slider, 2000), y), Qt.LeftButton)
+    assert slider.isSliderDown(), "the knob was not grabbed after jumping"
+    assert abs(slider.value() - 2000) < 250
+    _mouse(slider, QEvent.MouseMove, QPoint(_x_for_value(slider, 3000), y), Qt.LeftButton)
+    assert abs(slider.value() - 3000) < 250
+    process(100)
+    assert abs(player.media.position() - start) < 100, "playback jumped before release"
+    _mouse(slider, QEvent.MouseButtonRelease, QPoint(_x_for_value(slider, 3000), y), Qt.NoButton)
+    assert wait_until(lambda: abs(player.media.position() - 3000) < 300), \
+        f"position {player.media.position()}, expected ~3000"
+
+
+def test_click_on_knob_does_not_jump(player, music_dir):
+    """Clicking the knob itself (without moving) leaves the position where it was."""
+    _pause_at_start(player, make_wav(music_dir / "five_seconds.wav", 5.0))
+    player.media.setPosition(2000)
+    assert wait_until(lambda: player.progress.value() >= 1900)
+    slider = player.progress
+    knob = _slider_rects(slider)[1].center()
+    _mouse(slider, QEvent.MouseButtonPress, knob, Qt.LeftButton)
+    _mouse(slider, QEvent.MouseButtonRelease, knob, Qt.NoButton)
+    process(200)
+    assert abs(player.media.position() - 2000) < 300
 
 
 def test_slider_resets_when_switching_songs(player, music_dir, songs):

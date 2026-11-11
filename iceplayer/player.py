@@ -24,7 +24,7 @@ from .mini import AboutDialog, MiniWindow
 from .playlist import (AUDIO_EXTENSIONS, MODE_NAMES, PlayMode, is_audio, load_state,
                        next_index, previous_index, save_state)
 from .widgets import (FONT_FAMILY, MENU_STYLE, SLIDER_STYLE, DraggableMixin, IceButton,
-                      NoFocusDelegate, ScrollingLabel, VolumeButton, pixmap)
+                      NoFocusDelegate, ScrollingLabel, SeekSlider, VolumeButton, pixmap)
 
 SCROLL_THRESHOLD = 28   # titles longer than this marquee-scroll
 TEXT_SPEED = 500        # ms per scroll step
@@ -139,11 +139,12 @@ class IcePlayer(DraggableMixin, QWidget):
         self.artist_label.setFont(small)
         self.album_label.setFont(small)
 
-        self.progress = QSlider(Qt.Horizontal, self)
+        # SeekSlider: a click on the bar moves the knob straight to the mouse and grabs it.
+        self.progress = SeekSlider(Qt.Horizontal, self)
         self.progress.setGeometry(40, 150, 290, 20)
         self.progress.setStyleSheet(SLIDER_STYLE)
         self.progress.setEnabled(False)
-        # Only seek on release, so dragging doesn't produce a stutter of sound.
+        # Only seek on release (of a click or a drag), so dragging doesn't stutter the sound.
         self.progress.sliderReleased.connect(self._seek_to_slider)
         self.progress.actionTriggered.connect(self._on_slider_click)
 
@@ -491,19 +492,23 @@ class IcePlayer(DraggableMixin, QWidget):
         self.volume_button.set_volume(value)
 
     def _seek_to_slider(self):
-        """Progress bar released: jump to the slider position, and resume if not playing."""
+        """Progress bar released after a click or a drag: jump to the slider position, and
+        resume if not playing. (A click first moves the knob to the mouse — see SeekSlider.)"""
         self.media.setPosition(self.progress.value())
         if not self.is_playing():
             self.play_clicked()
 
     def _on_slider_click(self, action):
-        """Progress bar action: a click on the empty groove jumps playback at once.
+        """Progress bar page step: seek at once by 1/10 of the song.
+
+        Mouse clicks no longer cause page steps (SeekSlider moves the knob to the mouse
+        and the seek happens on release); this still handles the Page Up / Page Down
+        keys when the slider has keyboard focus.
 
         Args:
-            action: QSlider action as a plain int (``SliderPageStepAdd/Sub`` for groove
-                    clicks; handle drags are ignored here and seek on release).
+            action: QSlider action as a plain int (``SliderPageStepAdd/Sub`` for page
+                    steps; drags and other actions are ignored here).
         """
-        # Clicking on the groove (page step) seeks immediately.
         # actionTriggered passes a plain int, which never equals the enum member itself.
         if action in (QSlider.SliderAction.SliderPageStepAdd.value,
                       QSlider.SliderAction.SliderPageStepSub.value):

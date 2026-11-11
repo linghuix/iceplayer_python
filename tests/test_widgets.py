@@ -36,8 +36,9 @@ from PySide6.QtGui import QEnterEvent, QImage, QMouseEvent, QPainter
 from PySide6.QtWidgets import QStyle, QStyleOptionViewItem, QWidget
 
 from conftest import process, wait_until
-from iceplayer.widgets import (RES_DIR, DraggableMixin, IceButton, NoFocusDelegate,
-                               ScrollingLabel, VolumeButton, pixmap, res)
+from iceplayer.widgets import (RES_DIR, SLIDER_STYLE, DraggableMixin, IceButton,
+                               NoFocusDelegate, ScrollingLabel, SeekSlider, VolumeButton,
+                               pixmap, res)
 
 # Every image file the app loads. Buttons come in pairs: normal + "_hover".
 ALL_IMAGES = [
@@ -157,6 +158,91 @@ def test_scrolling_label_restart_resets_position(qapp):
     label._tick(); label._tick(); label._tick()
     label.set_scrolling_text("world", 10000)
     assert label._pos == 0 and label.text() == "world"
+
+
+# =============================================================== SeekSlider
+@pytest.fixture
+def seek_slider(qapp):
+    """A 0-10000 SeekSlider, 290x20 with the player's style sheet (like the progress bar)."""
+    s = SeekSlider(Qt.Horizontal)
+    s.setStyleSheet(SLIDER_STYLE)
+    s.setRange(0, 10000)
+    s.resize(290, 20)
+    s.show()
+    yield s
+    s.close()
+
+
+def _slider_mouse(slider, kind, x, buttons=Qt.LeftButton, button=Qt.LeftButton):
+    """Send a mouse event at horizontal position ``x`` (vertical centre) to the slider."""
+    pos = QPoint(x, slider.height() // 2)
+    ev = QMouseEvent(kind, QPointF(pos), QPointF(slider.mapToGlobal(pos)), button, buttons, Qt.NoModifier)
+    slider.event(ev)
+
+
+def _x_of(slider, value):
+    """The pixel where ``value_at`` gives ``value`` (searched, so it matches any style)."""
+    return min(range(slider.width()), key=lambda x: abs(slider.value_at(x) - value))
+
+
+def test_seek_slider_value_at_ends_and_middle(seek_slider):
+    """``value_at`` maps the left end to 0, the right end to 10000, increasing in between;
+    positions past the ends are limited to the range."""
+    s = seek_slider
+    assert s.value_at(-50) == 0 and s.value_at(0) == 0
+    assert s.value_at(s.width() + 50) == 10000 and s.value_at(s.width() - 1) == 10000
+    values = [s.value_at(x) for x in range(0, s.width(), 10)]
+    assert values == sorted(values)
+    assert 4000 < s.value_at(s.width() // 2) < 6000
+
+
+@pytest.mark.parametrize("target", [1500, 5000, 9000])
+def test_seek_slider_click_jumps_to_mouse(seek_slider, target):
+    """A left-click on the bar moves the knob straight to the clicked value (not a
+    1/10 page step), and the knob is grabbed (``isSliderDown``) until release."""
+    s = seek_slider
+    released = []
+    s.sliderReleased.connect(lambda: released.append(s.value()))
+    x = _x_of(s, target)
+    _slider_mouse(s, QEvent.MouseButtonPress, x)
+    assert abs(s.value() - target) < 100, f"value {s.value()}, expected ~{target}"
+    assert s.isSliderDown()
+    _slider_mouse(s, QEvent.MouseButtonRelease, x, buttons=Qt.NoButton)
+    assert not s.isSliderDown()
+    assert len(released) == 1 and abs(released[0] - target) < 100   # what the player seeks to
+
+
+def test_seek_slider_click_on_knob_does_not_move_it(seek_slider):
+    """A click on the knob itself grabs it without changing the value."""
+    s = seek_slider
+    s.setValue(5000)
+    _slider_mouse(s, QEvent.MouseButtonPress, _x_of(s, 5000))
+    assert s.value() == 5000 and s.isSliderDown()
+
+
+def test_seek_slider_right_click_does_nothing(seek_slider):
+    """Right-clicks don't move the knob."""
+    s = seek_slider
+    _slider_mouse(s, QEvent.MouseButtonPress, _x_of(s, 8000), Qt.RightButton, Qt.RightButton)
+    assert s.value() == 0
+
+
+def test_seek_slider_disabled_ignores_clicks(seek_slider):
+    """A disabled slider (no song loaded) ignores clicks."""
+    s = seek_slider
+    s.setEnabled(False)
+    _slider_mouse(s, QEvent.MouseButtonPress, _x_of(s, 8000))
+    assert s.value() == 0
+
+
+def test_seek_slider_click_then_drag(seek_slider):
+    """After the click-jump the user holds the knob: dragging moves it on from there."""
+    s = seek_slider
+    _slider_mouse(s, QEvent.MouseButtonPress, _x_of(s, 3000))
+    _slider_mouse(s, QEvent.MouseMove, _x_of(s, 7000))
+    assert abs(s.value() - 7000) < 150
+    _slider_mouse(s, QEvent.MouseButtonRelease, _x_of(s, 7000), buttons=Qt.NoButton)
+    assert abs(s.value() - 7000) < 150
 
 
 # =============================================================== VolumeButton

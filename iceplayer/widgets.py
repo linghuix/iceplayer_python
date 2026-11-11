@@ -3,6 +3,7 @@
 * ``res`` / ``pixmap``   locate and load skin images from ``iceplayer/resources``.
 * ``IceButton``          flat image button that highlights on mouse hover.
 * ``ScrollingLabel``     label that scrolls (marquee) long song titles.
+* ``SeekSlider``         slider whose knob jumps straight to where you click.
 * ``VolumeButton``       speaker icon with a popup volume slider.
 * ``NoFocusDelegate``    hides the dotted focus box on playlist rows.
 * ``DraggableMixin``     lets a frameless window be moved by dragging it.
@@ -13,7 +14,8 @@ from pathlib import Path
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (QLabel, QMenu, QPushButton, QSlider, QStyle,
-                               QStyledItemDelegate, QWidget, QWidgetAction)
+                               QStyledItemDelegate, QStyleOptionSlider, QWidget,
+                               QWidgetAction)
 
 #: Folder holding the skin images (also bundled into the .exe by IcePlayer.spec).
 RES_DIR = Path(__file__).resolve().parent / "resources"
@@ -148,6 +150,54 @@ class ScrollingLabel(QLabel):
             self._pos = 0
         self.setText(self._text[self._pos:])
         self._pos += 1
+
+
+class SeekSlider(QSlider):
+    """Horizontal slider where a left-click on the bar moves the knob straight to the
+    mouse (a plain QSlider only steps a "page" toward the click).
+
+    After jumping, the click is handed to QSlider as if it had landed on the knob, so
+    the user is now holding the knob: releasing emits ``sliderReleased`` (the player
+    seeks then), and keeping the button down drags on from the new spot.
+    """
+
+    def value_at(self, x: int) -> int:
+        """Convert a horizontal pixel position into a slider value.
+
+        Args:
+            x: Position inside the slider, in pixels (0 = left edge of the widget).
+
+        Returns:
+            The value whose knob centre would sit at ``x``, limited to
+            ``minimum()``..``maximum()`` (clicks past either end give the end value).
+        """
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        style = self.style()
+        groove = style.subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderGroove, self)
+        handle = style.subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, self)
+        span = groove.width() - handle.width()
+        pos = x - groove.x() - handle.width() // 2
+        return QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), pos, max(1, span))
+
+    def _handle_rect(self):
+        """Returns: the knob's current rectangle, in pixels inside the slider."""
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        return self.style().subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, self)
+
+    def mousePressEvent(self, event):
+        """Qt callback: a left-click away from the knob moves the knob to the mouse first.
+
+        Args:
+            event: Qt mouse event. Clicks on the knob itself, other buttons and clicks
+                   on a disabled slider behave exactly like a normal QSlider.
+        """
+        point = event.position().toPoint()
+        if (event.button() == Qt.LeftButton and self.isEnabled()
+                and not self._handle_rect().contains(point)):
+            self.setSliderPosition(self.value_at(point.x()))
+        super().mousePressEvent(event)   # the knob is now under the mouse: start dragging it
 
 
 class VolumeButton(QWidget):

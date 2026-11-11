@@ -22,7 +22,8 @@ python run.py "D:/Music/song.mp3"
 ## Features
 
 - Main window (400×600, frameless, semi-transparent, drag to move): cover art, title
-  (scrolls when long), artist, album, seek bar (seeks when you release it), time.
+  (scrolls when long), artist, album, seek bar, time. Click anywhere on the seek bar
+  to jump there, or drag the knob; playback moves when you release the mouse.
 - Play/pause (pause fades out the volume), previous/next, volume popup, play-mode
   menu: 单曲播放 / 列表循环 / 单曲循环 / 随机播放. Space toggles play/pause.
 - Playlist: double-click to play, right-click to add songs or a folder, remove one
@@ -52,7 +53,7 @@ python run.py "D:/Music/song.mp3"
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 286 tests, about 30 s
+python -m pytest            # 300 tests, about 35 s
 python -m pytest tests/test_lyrics.py -v    # one file, verbose
 ```
 
@@ -65,7 +66,7 @@ your real `IceList.json` and never talk to a player you have open.
 | `tests/test_lyrics.py` | LRC encoding detection, time-tag parsing, lyric lookup, desktop lyric window |
 | `tests/test_playlist.py` | audio file types, next/previous for every play mode, saving/loading state |
 | `tests/test_widgets.py` | every skin image, hover buttons, scrolling title, volume popup, window dragging |
-| `tests/test_player.py` | playlist add/remove/clear, dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, progress slider (follows playback, mouse drag and click to seek), real-world MP3s (ID3 tags, embedded cover, LAME header), lyrics sync, cover art, drag & drop, saving on close |
+| `tests/test_player.py` | playlist add/remove/clear, dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, progress slider (follows playback, drag to seek, click jumps to the mouse), real-world MP3s (ID3 tags, embedded cover, LAME header), lyrics sync, cover art, drag & drop, saving on close |
 | `tests/test_mini.py` | about dialog, mini window buttons and menu, syncing with the main window |
 | `tests/test_app.py` | single-instance handoff from a second process, the real `run.py` / `python -m iceplayer` launchers |
 
