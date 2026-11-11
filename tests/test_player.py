@@ -14,6 +14,9 @@ What is tested (sections below follow this order)
                            both simulated and with real short songs.
 8.  Volume, seek, progress Slider range, time label, seeking on release / groove click.
     + Freeze regression    Pause → seek → clear/remove/close used to hang Qt 6.8 forever.
+    + Real slider use      Slider follows real playback to the end; dragging the knob with
+                           the mouse seeks only on release; clicking the bar jumps forward;
+                           switching songs resets the range.
 9.  Song info              Title/artist/album fallbacks, long-title scrolling, lyrics
                            following playback, cover art from song.jpg or default.
 10. Other windows          Lyric bar toggle, mini mode, About, minimise, add button.
@@ -42,10 +45,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QPixmap, QShortcut
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QMouseEvent, QPixmap, QShortcut
 from PySide6.QtMultimedia import QMediaPlayer
-from PySide6.QtWidgets import QSlider
+from PySide6.QtWidgets import QApplication, QSlider, QStyle, QStyleOptionSlider
 
 from conftest import make_jpeg, make_mp3, make_wav, process, wait_until
 from iceplayer import player as player_mod
@@ -632,6 +635,136 @@ def test_slider_drag_action_does_not_seek_immediately(player):
         player._on_slider_click(QSlider.SliderMove)
         process(30)
     set_pos.assert_not_called()
+
+
+# --- The progress slider with real playback and real mouse input -----------------
+# The tests above feed the player made-up positions or call its handlers directly.
+# These play real audio and use the mouse like a user, so they also cover the Qt
+# connections (positionChanged -> slider, mouse release -> seek, click -> jump).
+def _slider_rects(slider):
+    """Where the slider's groove (the bar) and handle (the knob) are drawn, in pixels.
+
+    Returns:
+        (groove QRect, handle QRect), asked from the slider's own style, so the
+        positions are right whatever Qt style is active.
+    """
+    opt = QStyleOptionSlider()
+    slider.initStyleOption(opt)
+    style = slider.style()
+    groove = style.subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderGroove, slider)
+    handle = style.subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, slider)
+    return groove, handle
+
+
+def _x_for_value(slider, value):
+    """The x pixel where the handle's centre sits when the slider shows ``value``."""
+    groove, handle = _slider_rects(slider)
+    span = groove.width() - handle.width()
+    offset = QStyle.sliderPositionFromValue(slider.minimum(), slider.maximum(), value, span)
+    return groove.x() + offset + handle.width() // 2
+
+
+def _mouse(slider, kind, pos, buttons):
+    """Send one mouse event (press/move/release) at ``pos`` to the slider, with the
+    left button held according to ``buttons`` — the events a real mouse produces."""
+    ev = QMouseEvent(kind, QPointF(pos), QPointF(slider.mapToGlobal(pos)),
+                     Qt.LeftButton, buttons, Qt.NoModifier)
+    QApplication.sendEvent(slider, ev)
+    process(10)
+
+
+def _pause_at_start(player, path):
+    """Play ``path``, then pause just after it starts, so positions only change by seeking."""
+    player.add_files([str(path)])
+    player.play_index(0)
+    wait_playing(player)
+    player.media.pause()
+    assert wait_until(lambda: player.media.playbackState() == QMediaPlayer.PausedState)
+    assert wait_until(lambda: player.progress.maximum() > 0)
+    player.show()
+
+
+def test_slider_follows_real_playback(player, music_dir):
+    """While a real 4 s song plays, the slider's range is the song length, its value keeps
+    rising with the playback position, and the time label counts up to 00:01."""
+    song = make_wav(music_dir / "four_seconds.wav", 4.0)
+    player.add_files([str(song)])
+    player.play_index(0)
+    assert wait_until(lambda: player.progress.maximum() >= 3900), "slider range not set to song length"
+    assert player.progress.isEnabled()
+    assert wait_until(lambda: player.progress.value() > 300), "slider did not move"
+    first = player.progress.value()
+    assert wait_until(lambda: player.progress.value() > first + 300), "slider stopped moving"
+    assert abs(player.progress.value() - player.media.position()) < 400   # tracks the real position
+    assert wait_until(lambda: player.time_label.text() == "00:01", 3000)
+
+
+def test_slider_reaches_the_end_of_the_song(player, songs):
+    """When a song plays to its end, the slider ends up at (or next to) its maximum."""
+    player.add_files(songs)
+    player.play_index(0)                                   # alpha.wav, 1 s, 单曲播放
+    assert wait_until(lambda: player.media.mediaStatus() == QMediaPlayer.EndOfMedia, 6000)
+    process(100)
+    assert player.progress.value() >= player.progress.maximum() - 150
+
+
+def test_drag_handle_with_mouse_seeks_on_release(player, music_dir):
+    """Drag the knob with the mouse to 3.5 s of a 5 s song:
+
+    * while the button is held, the slider follows the mouse but playback does NOT
+      jump yet (no stuttering sound while dragging);
+    * on release, playback jumps to ~3.5 s and resumes (it was paused).
+    """
+    _pause_at_start(player, make_wav(music_dir / "five_seconds.wav", 5.0))
+    slider = player.progress
+    start = player.media.position()
+    _, handle = _slider_rects(slider)
+    y = handle.center().y()
+    target = 3500
+
+    _mouse(slider, QEvent.MouseButtonPress, handle.center(), Qt.LeftButton)
+    assert slider.isSliderDown()
+    for frac in (0.25, 0.5, 0.75, 1.0):                    # move in steps, like a real drag
+        x = handle.center().x() + int((_x_for_value(slider, target) - handle.center().x()) * frac)
+        _mouse(slider, QEvent.MouseMove, QPoint(x, y), Qt.LeftButton)
+    assert abs(slider.value() - target) < 300, f"slider at {slider.value()}, expected ~{target}"
+    process(100)
+    assert abs(player.media.position() - start) < 100, "playback jumped before the mouse was released"
+
+    _mouse(slider, QEvent.MouseButtonRelease, QPoint(_x_for_value(slider, target), y), Qt.NoButton)
+    assert not slider.isSliderDown()
+    assert wait_until(lambda: player.media.position() >= target - 300), \
+        f"after release position is {player.media.position()}, expected ~{target}"
+    assert wait_until(player.is_playing), "playback did not resume after the drag"
+
+
+def test_click_on_empty_bar_with_mouse_jumps_forward(player, music_dir):
+    """A real mouse click on the bar to the right of the knob jumps playback forward
+    (by 1/10 of the song, or straight to the click, depending on the Qt style)."""
+    _pause_at_start(player, make_wav(music_dir / "five_seconds.wav", 5.0))
+    slider = player.progress
+    start = player.media.position()
+    groove, _ = _slider_rects(slider)
+    spot = QPoint(groove.right() - 5, groove.center().y())
+    _mouse(slider, QEvent.MouseButtonPress, spot, Qt.LeftButton)
+    _mouse(slider, QEvent.MouseButtonRelease, spot, Qt.NoButton)
+    assert wait_until(lambda: player.media.position() >= start + 450, 3000), \
+        f"position {player.media.position()} did not jump forward from {start}"
+
+
+def test_slider_resets_when_switching_songs(player, music_dir, songs):
+    """After seeking far into a long song, switching to a short song resets the slider
+    range to the new song's length and starts it near 0."""
+    long_song = make_wav(music_dir / "five_seconds.wav", 5.0)
+    player.add_files([str(long_song)] + songs)
+    player.play_index(0)
+    assert wait_until(lambda: player.progress.maximum() >= 4900)
+    player.media.setPosition(4000)
+    assert wait_until(lambda: player.progress.value() >= 3900)
+    player.play_index(1)                                   # alpha.wav, 1 s
+    assert wait_until(lambda: 0 < player.progress.maximum() <= 1100), \
+        f"range still {player.progress.maximum()}"
+    assert player.progress.value() <= 1100
 
 
 # =============================================================== 8b. real-world MP3 files
