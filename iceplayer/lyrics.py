@@ -5,9 +5,20 @@
 * ``load_lrc_for``  find and read ``song.lrc`` next to ``song.mp3``.
 * ``Lyrics``        answers "which line should show at this playback position?".
 * ``LyricWindow``   the 800x80 floating lyric bar.
+
+Online lyrics (used when a song has no .lrc file, see ``IcePlayer.toggle_lyrics``):
+
+* ``guess_title_artist``  title/artist for the search, also from "Artist - Title" file names.
+* ``search_lrclib``       ask lrclib.net for timed lyrics.
+* ``pick_lyrics``         choose the best of lrclib's results.
+* ``save_lrc_for``        write them as ``song.lrc`` so the next play needs no internet.
 """
 import bisect
+import json
+import os
 import re
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt
@@ -107,6 +118,120 @@ def load_lrc_for(audio_path: str) -> list[tuple[int, str]]:
         return parse_lrc(_decode(lrc.read_bytes()))
     except OSError:
         return []
+
+
+# lrclib.net: free lyric database, no API key. ICEPLAYER_LRCLIB_URL replaces it (the
+# tests point it at a local fake server so they never use the internet).
+LRCLIB_URL = "https://lrclib.net/api/search"
+USER_AGENT = "IcePlayer-python (https://github.com/linghuix/iceplayer_python)"
+UNKNOWN_ARTIST = "未知音乐家"      # the artist label when a song has no artist tag
+
+
+def guess_title_artist(title: str, artist: str, file_stem: str) -> tuple[str, str]:
+    """Decide what to search for.
+
+    Args:
+        title:     Title tag, or "" when the song has none.
+        artist:    Artist tag, or "" / "未知音乐家" when the song has none.
+        file_stem: File name without extension, e.g. "周杰伦 - 晴天".
+
+    Returns:
+        ``(title, artist)``. Tags win. Without a title tag, a file name like
+        "Artist - Title" is split into both parts; otherwise the whole file name is the
+        title. The artist is "" when unknown (then only the title is searched).
+    """
+    artist = "" if artist.strip() == UNKNOWN_ARTIST else artist.strip()
+    title = title.strip()
+    if not title:
+        left, sep, right = file_stem.partition(" - ")
+        if sep and left.strip() and right.strip():
+            title = right.strip()
+            artist = artist or left.strip()
+        else:
+            title = file_stem.strip()
+    return title, artist
+
+
+def pick_lyrics(results: list, duration_ms: int = 0) -> str | None:
+    """Choose the best lyrics from lrclib's search results.
+
+    Args:
+        results:     The decoded JSON list; each item may have ``syncedLyrics`` (LRC text
+                     with time tags, or null) and ``duration`` (seconds).
+        duration_ms: Length of the playing song, 0 if unknown.
+
+    Returns:
+        The ``syncedLyrics`` of the result whose duration is closest to the song's
+        (the first such result if the duration is unknown, so lrclib's own ranking
+        decides), or None if no result has timed lyrics. Untimed ``plainLyrics`` are
+        ignored: the lyric bar needs times. Versions more than 10 s longer or shorter
+        (e.g. live recordings) are only used when nothing closer exists.
+    """
+    timed = [r for r in results if isinstance(r, dict)
+             and isinstance(r.get("syncedLyrics"), str) and parse_lrc(r["syncedLyrics"])]
+    if not timed:
+        return None
+    if duration_ms > 0:
+        def distance(r):
+            try:
+                return abs(float(r.get("duration") or 0) * 1000 - duration_ms)
+            except (TypeError, ValueError):
+                return float("inf")
+        timed.sort(key=distance)       # stable: equal distances keep lrclib's order
+    return timed[0]["syncedLyrics"]
+
+
+def search_lrclib(title: str, artist: str = "", duration_ms: int = 0,
+                  timeout: float = 10.0) -> str | None:
+    """Search lrclib.net for a song's timed lyrics.
+
+    Calls ``<LRCLIB_URL>?track_name=<title>&artist_name=<artist>`` (artist left out
+    when unknown). Blocks until the answer arrives, so call it from a background thread.
+
+    Args:
+        title:       Song title, e.g. "晴天". Nothing is searched if it is empty.
+        artist:      Artist, e.g. "周杰伦", or "" if unknown.
+        duration_ms: Song length, to prefer the matching version (see ``pick_lyrics``).
+        timeout:     Seconds to wait for the server.
+
+    Returns:
+        LRC text (``[00:28.90] ...`` lines), or None if nothing with timed lyrics was found.
+
+    Raises:
+        OSError: no connection, timeout or an HTTP error (``urllib.error.URLError`` is
+            an OSError). ``ValueError`` if the server's answer isn't JSON.
+    """
+    if not title.strip():
+        return None
+    params = {"track_name": title}
+    if artist:
+        params["artist_name"] = artist
+    url = os.environ.get("ICEPLAYER_LRCLIB_URL", LRCLIB_URL) + "?" + urllib.parse.urlencode(params)
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        results = json.loads(response.read().decode("utf-8"))
+    return pick_lyrics(results if isinstance(results, list) else [], duration_ms)
+
+
+def save_lrc_for(audio_path: str, text: str) -> bool:
+    """Save downloaded lyrics next to the song as ``song.lrc`` (UTF-8).
+
+    Args:
+        audio_path: Path of the song, e.g. ``"D:/Music/song.mp3"``.
+        text:       LRC text.
+
+    Returns:
+        True if written. False if the folder isn't writable (e.g. a CD or a read-only
+        share): the lyrics are still shown, just downloaded again next time. An
+        existing ``song.lrc`` is never overwritten.
+    """
+    lrc = Path(audio_path).with_suffix(".lrc")
+    try:
+        with open(lrc, "x", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+        return True
+    except OSError:
+        return False
 
 
 class Lyrics:

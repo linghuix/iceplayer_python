@@ -11,6 +11,9 @@ What is tested
 4. ``Lyrics``       Picking the line that should show at a given playback position.
 5. ``LyricWindow``  The 800x80 always-on-top lyric bar: size, flags, text, painting,
                     and its right-click "隐藏" (hide) menu.
+6. Online lyrics    ``guess_title_artist`` (what to search for), ``pick_lyrics`` (best
+                    of lrclib's results), ``search_lrclib`` (the request, against a
+                    fake local server, never the real internet) and ``save_lrc_for``.
 
 How it is tested
 ----------------
@@ -204,3 +207,117 @@ def test_lyric_window_context_menu_hides(qapp):
     with patch.object(w.menu, "exec", fake_exec):
         w.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(5, 5), QPoint(5, 5)))
     assert w.isHidden()
+
+
+# =============================================================== 6. online lyrics (lrclib.net)
+from iceplayer.lyrics import (guess_title_artist, pick_lyrics, save_lrc_for,  # noqa: E402
+                              search_lrclib)
+
+SUNNY = "[00:28.90] 故事的小黃花\n[00:32.73] 從出生那年就飄著\n"
+LIVE = "[00:01.00] live version\n"
+
+
+@pytest.mark.parametrize("title, artist, stem, expected", [
+    ("晴天", "周杰伦", "track01", ("晴天", "周杰伦")),          # tags win
+    ("", "未知音乐家", "周杰伦 - 晴天", ("晴天", "周杰伦")),     # "Artist - Title" file name
+    ("", "", "晴天", ("晴天", "")),                             # just a title
+    ("晴天", "未知音乐家", "x - y", ("晴天", "")),              # placeholder artist is not searched
+    ("", "Tag Artist", "Other - Song", ("Song", "Tag Artist")),  # artist tag beats file name
+    ("  Song  ", " Band ", "s", ("Song", "Band")),              # spaces trimmed
+])
+def test_guess_title_artist(title, artist, stem, expected):
+    """Input: title tag, artist tag, file name. Expected: (title, artist) to search for."""
+    assert guess_title_artist(title, artist, stem) == expected
+
+
+def test_pick_lyrics_prefers_matching_duration():
+    """Input: a live version (299 s) listed first and the album version (270 s).
+    Expected: for a 270 s song the album version wins; for 300 s the live one."""
+    results = [{"duration": 299.0, "syncedLyrics": LIVE},
+               {"duration": 270.0, "syncedLyrics": SUNNY}]
+    assert pick_lyrics(results, 270_000) == SUNNY
+    assert pick_lyrics(results, 300_000) == LIVE
+
+
+def test_pick_lyrics_unknown_duration_keeps_lrclib_order():
+    """Input: song length unknown (0). Expected: the first result with timed lyrics."""
+    results = [{"duration": 299.0, "syncedLyrics": LIVE},
+               {"duration": 270.0, "syncedLyrics": SUNNY}]
+    assert pick_lyrics(results, 0) == LIVE
+
+
+def test_pick_lyrics_needs_timed_lyrics():
+    """Input: results with no syncedLyrics, only plainLyrics, untimed text in
+    syncedLyrics, or junk. Expected: None (the lyric bar needs times); a timed result
+    after them is still found."""
+    useless = [{"syncedLyrics": None, "plainLyrics": "words"},
+               {"plainLyrics": "words"}, {"syncedLyrics": "no time tags"}, "junk", None]
+    assert pick_lyrics(useless, 270_000) is None
+    assert pick_lyrics(useless + [{"syncedLyrics": SUNNY}], 270_000) == SUNNY
+    assert pick_lyrics([], 0) is None
+
+
+def test_pick_lyrics_bad_duration_sorts_last():
+    """Input: one result with a non-numeric duration. Expected: no crash; the result
+    with a real, close duration wins."""
+    results = [{"duration": "?", "syncedLyrics": LIVE}, {"duration": 270, "syncedLyrics": SUNNY}]
+    assert pick_lyrics(results, 270_000) == SUNNY
+
+
+def test_search_lrclib_sends_title_and_artist(lrclib):
+    """Input: 晴天 / 周杰伦, 270 s. Expected: one GET with track_name and artist_name
+    (Chinese text URL-encoded and decoded back intact), an IcePlayer User-Agent, and
+    the matching synced lyrics returned."""
+    lrclib.results = [{"duration": 270.0, "syncedLyrics": SUNNY}]
+    assert search_lrclib("晴天", "周杰伦", 270_000) == SUNNY
+    assert len(lrclib.requests) == 1
+    req = lrclib.requests[0]
+    assert req["track_name"] == "晴天" and req["artist_name"] == "周杰伦"
+    assert req["_ua"].startswith("IcePlayer")
+
+
+def test_search_lrclib_without_artist(lrclib):
+    """Input: no artist. Expected: only track_name is sent."""
+    search_lrclib("Song")
+    assert "artist_name" not in lrclib.requests[0] and lrclib.requests[0]["track_name"] == "Song"
+
+
+def test_search_lrclib_nothing_found(lrclib):
+    """Input: server answers [] or a non-list. Expected: None, no error."""
+    assert search_lrclib("nothing") is None
+    lrclib.results = {"error": "odd"}
+    assert search_lrclib("nothing") is None
+
+
+def test_search_lrclib_empty_title_sends_nothing(lrclib):
+    """Input: blank title. Expected: None without asking the server."""
+    assert search_lrclib("  ", "artist") is None
+    assert lrclib.requests == []
+
+
+def test_search_lrclib_errors_raise_oserror(lrclib, monkeypatch):
+    """Input: an HTTP 500 answer, then a closed port (no server / no internet).
+    Expected: OSError both times (the player shows "search failed" for it)."""
+    lrclib.status = 500
+    with pytest.raises(OSError):
+        search_lrclib("x")
+    monkeypatch.setenv("ICEPLAYER_LRCLIB_URL", "http://127.0.0.1:9/api/search")
+    with pytest.raises(OSError):
+        search_lrclib("x", timeout=3)
+
+
+def test_save_lrc_for_writes_loadable_file(tmp_path):
+    """Input: song.wav + downloaded text. Expected: song.lrc in UTF-8 that load_lrc_for
+    reads back; a second save never overwrites it."""
+    song = tmp_path / "晴天.wav"
+    assert save_lrc_for(str(song), SUNNY)
+    assert (tmp_path / "晴天.lrc").read_text(encoding="utf-8") == SUNNY
+    assert load_lrc_for(str(song)) == [(28900, "故事的小黃花"), (32730, "從出生那年就飄著")]
+    assert not save_lrc_for(str(song), LIVE)
+    assert (tmp_path / "晴天.lrc").read_text(encoding="utf-8") == SUNNY
+
+
+def test_save_lrc_for_unwritable_folder(tmp_path):
+    """Input: a song in a folder that doesn't exist (stands in for read-only).
+    Expected: False, no exception."""
+    assert save_lrc_for(str(tmp_path / "missing" / "s.wav"), SUNNY) is False

@@ -1098,6 +1098,142 @@ def test_reset_info(player, songs):
     assert player.lyric_window.text() == "冰点播放器" and player.time_label.text() == "00:00"
 
 
+# =============================================================== 9b. online lyrics (lrclib.net)
+# These use the ``lrclib`` fixture: a fake lrclib.net server on this computer, so no
+# test needs (or uses) the internet.
+ONLINE_LRC = "[00:00.00] 网上的第一行\n[00:30.00] 网上的第二行\n"
+
+
+def test_lyric_button_searches_online_and_saves_lrc(player, songs, music_dir, lrclib):
+    """alpha.wav has no alpha.lrc. Clicking the lyric button: the bar says 正在搜索歌词…,
+    lrclib is asked for "alpha" (no artist: untagged WAV), the lyrics are shown, and
+    saved as alpha.lrc so the next play needs no internet."""
+    lrclib.results = [{"duration": 1.0, "syncedLyrics": ONLINE_LRC}]
+    lrclib.delay = 0.3                       # long enough to see the "searching" text
+    player.add_files(songs)
+    player.play_index(0)
+    player.lyric_button.click()
+    assert player.lyric_window.text() == player_mod.LYRIC_SEARCHING
+    assert wait_until(lambda: bool(player.lyrics))
+    assert player.lyric_window.text() == "网上的第一行"
+    assert lrclib.requests[0]["track_name"] == "alpha"
+    assert "artist_name" not in lrclib.requests[0]
+    assert (music_dir / "alpha.lrc").read_text(encoding="utf-8") == ONLINE_LRC
+
+
+def test_lyric_button_no_search_when_lrc_exists(player, songs, lrclib):
+    """测试歌曲.wav has its own .lrc: showing the bar never asks lrclib."""
+    player.add_files(songs)
+    player.play_index(1)
+    player.lyric_button.click()
+    process(300)
+    assert lrclib.requests == [] and player.lyric_window.text() == "第一行"
+
+
+def test_lyric_button_no_search_without_song(player, lrclib):
+    """Nothing loaded: the bar opens with 冰点播放器, no search."""
+    player.lyric_button.click()
+    process(200)
+    assert lrclib.requests == [] and player.lyric_window.text() == "冰点播放器"
+
+
+def test_hiding_lyric_bar_does_not_search(player, songs, lrclib):
+    """Only showing the bar searches: show (1 search), hide (none)."""
+    player.add_files(songs)
+    player.play_index(0)
+    player.toggle_lyrics()
+    assert wait_until(lambda: player.lyric_window.text() == player_mod.LYRIC_NOT_FOUND)
+    player.toggle_lyrics()
+    process(200)
+    assert len(lrclib.requests) == 1
+
+
+def test_lyrics_not_found_is_not_searched_again(player, songs, music_dir, lrclib):
+    """lrclib has nothing: the bar says 没有找到歌词, no file is written, and showing
+    the bar again for the same song doesn't ask again."""
+    player.add_files(songs)
+    player.play_index(0)
+    player.toggle_lyrics()
+    assert wait_until(lambda: player.lyric_window.text() == player_mod.LYRIC_NOT_FOUND)
+    player.toggle_lyrics()
+    player.toggle_lyrics()
+    process(300)
+    assert len(lrclib.requests) == 1
+    assert not (music_dir / "alpha.lrc").exists()
+
+
+@pytest.mark.parametrize("lrc, error, message", [
+    (None, "", player_mod.LYRIC_NOT_FOUND), (None, "timed out", player_mod.LYRIC_FAILED)],
+    ids=["not-found", "failed"])
+def test_search_message_survives_late_tags(player, songs, lrc, error, message):
+    """The song's tags can arrive after the search has ended. They must not replace
+    the search message with the title (the message would flash and vanish).
+
+    Input: search result delivered first, then the metadata callback. Expected: the
+    message is still shown. A new song shows its own title again."""
+    player.add_files(songs)
+    player.play_index(0)
+    player._lyric_message_shown = True       # as set by search_online_lyrics
+    player._on_online_lyrics(songs[0], lrc, error)
+    player._on_metadata()
+    assert player.lyric_window.text() == message
+    player.play_index(2)
+    assert player.lyric_window.text() == "gamma"
+
+
+def test_failed_lyric_search_is_retried(player, songs, lrclib):
+    """The server fails (HTTP 500, like no internet): the bar says
+    歌词搜索失败，请检查网络; the next time the bar is shown it tries again and works."""
+    lrclib.status = 500
+    player.add_files(songs)
+    player.play_index(0)
+    player.toggle_lyrics()
+    assert wait_until(lambda: player.lyric_window.text() == player_mod.LYRIC_FAILED)
+    lrclib.status = 200
+    lrclib.results = [{"syncedLyrics": ONLINE_LRC}]
+    player.toggle_lyrics()                   # hide
+    player.toggle_lyrics()                   # show again -> retry
+    assert wait_until(lambda: bool(player.lyrics))
+    assert len(lrclib.requests) == 2
+
+
+def test_late_lyrics_for_previous_song_are_ignored(player, songs, music_dir, lrclib):
+    """The answer for alpha arrives after the user switched to gamma: it is thrown
+    away (gamma doesn't get alpha's lyrics, no alpha.lrc is written)."""
+    lrclib.results = [{"syncedLyrics": ONLINE_LRC}]
+    lrclib.delay = 0.5
+    player.add_files(songs)
+    player.play_index(0)
+    player.toggle_lyrics()
+    player.play_index(2)                     # switch before the answer arrives
+    process(1200)
+    assert len(lrclib.requests) == 1
+    assert not player.lyrics
+    assert not (music_dir / "alpha.lrc").exists()
+    assert player.lyric_window.text() != "网上的第一行"
+
+
+def test_online_search_uses_mp3_tags(player, tagged_mp3, lrclib):
+    """A tagged MP3: the search uses its title and artist tags, not the file name."""
+    player.add_files([tagged_mp3])
+    player.play_index(0)
+    assert wait_until(lambda: player.artist_label.text() == "テスト歌手")
+    player.toggle_lyrics()
+    assert wait_until(lambda: len(lrclib.requests) == 1)
+    assert lrclib.requests[0]["track_name"] == "Test Song Title"
+    assert lrclib.requests[0]["artist_name"] == "テスト歌手"
+
+
+def test_online_lyrics_from_mini_window_menu(player, songs, lrclib):
+    """The mini window's 桌面歌词 menu item shows the bar the same way, so it also searches."""
+    lrclib.results = [{"syncedLyrics": ONLINE_LRC}]
+    player.add_files(songs)
+    player.play_index(2)
+    action = next(a for a in player.mini_window.menu.actions() if a.text() == "桌面歌词")
+    action.trigger()
+    assert wait_until(lambda: bool(player.lyrics))
+    assert lrclib.requests[0]["track_name"] == "gamma"
+
 # =============================================================== 10. other windows & buttons
 def test_toggle_lyrics(player):
     """The lyric button shows the lyric bar; pressing again hides it."""

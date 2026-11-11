@@ -45,6 +45,13 @@ python run.py "D:/Music/song.mp3"
   original, the whole window is 90% opaque on top of that (`setWindowOpacity(0.9)`).
 - Desktop lyrics: an always-on-top bar that reads `song.lrc` next to the song file.
   UTF-8, UTF-16 and GBK files are all supported. Right-click the bar to hide it.
+- Online lyrics: if the song has no `song.lrc`, showing the lyric bar (lyric button,
+  or 桌面歌词 in the mini window) searches [lrclib.net](https://lrclib.net) in the
+  background, by title + artist from the tags, or from an "Artist - Title" file name.
+  The version whose length matches the song is used and saved as `song.lrc` next to
+  it, so later plays work offline. The bar shows 正在搜索歌词… meanwhile, then
+  没有找到歌词 (not searched again for that song) or 歌词搜索失败，请检查网络 (tried
+  again next time the bar is shown). Only the title and artist are sent.
 - Cover art comes from `song.jpg` next to the song, then from art embedded in the
   file, then the default image.
 - Mini mode: a 100×100 floating button. Right-click it for the menu; double-click
@@ -57,9 +64,9 @@ python run.py "D:/Music/song.mp3"
 
 ## Changes from the C++ version
 
-- **Online lyrics/cover download removed.** The Baidu Music API it called no
-  longer exists. Local `.lrc` and `.jpg` files, including ones the old version
-  downloaded, still work.
+- **Online lyrics come from lrclib.net; online covers were removed.** The Baidu
+  Music API the original used no longer exists. Local `.lrc` and `.jpg` files,
+  including ones the old version downloaded, still work.
 - Qt 6 has no `QMediaPlaylist`, so play modes are handled in `playlist.py`.
 - The playlist is now JSON (`IceList.json`) instead of the binary `IceList.ilst`.
 - The app no longer registers itself as an `.mp3` handler in the registry. Use
@@ -69,7 +76,7 @@ python run.py "D:/Music/song.mp3"
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 356 tests, about 40 s
+python -m pytest            # 384 tests, about 50 s
 python -m pytest tests/test_lyrics.py -v    # one file, verbose
 ```
 
@@ -79,10 +86,10 @@ your real `IceList.json` and never talk to a player you have open.
 
 | File | Covers |
 |---|---|
-| `tests/test_lyrics.py` | LRC encoding detection, time-tag parsing, lyric lookup, desktop lyric window |
+| `tests/test_lyrics.py` | LRC encoding detection, time-tag parsing, lyric lookup, desktop lyric window, online lyric search (title/artist guess, choosing a result, saving .lrc) |
 | `tests/test_playlist.py` | audio file types, next/previous for every play mode, saving/loading state |
 | `tests/test_widgets.py` | every skin image, hover buttons, scrolling title, volume popup, window dragging |
-| `tests/test_player.py` | playlist add/remove/clear, dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, progress slider (follows playback, drag to seek, click jumps to the mouse), real-world MP3s (ID3 tags, embedded cover, LAME header), lyrics sync, cover art, drag & drop, saving on close |
+| `tests/test_player.py` | playlist add/remove/clear, dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, progress slider (follows playback, drag to seek, click jumps to the mouse), real-world MP3s (ID3 tags, embedded cover, LAME header), lyrics sync, online lyrics from the lyric button (searching message, saved .lrc, not found / failed / retry, answer for a previous song ignored), cover art, drag & drop, saving on close |
 | `tests/test_mini.py` | about dialog, mini window buttons and menu, syncing with the main window |
 | `tests/test_app.py` | single-instance handoff from a second process, where the playlist is saved, the real `run.py` / `python -m iceplayer` launchers |
 | `tests/test_build.py` | the MSI builder (files, folders, shortcuts, upgrade rules, every wizard dialog and button), `build.py` helpers (version checks, portable naming, clean build PATH, no bundled ICU, stopping the single-file exe's process tree) |
@@ -177,7 +184,7 @@ run.py                  launcher
 iceplayer/app.py        startup + single-instance (QLocalServer)
 iceplayer/player.py     main window and playback
 iceplayer/playlist.py   play-mode logic, saving
-iceplayer/lyrics.py     LRC parser + desktop lyric window
+iceplayer/lyrics.py     LRC parser, lrclib.net search, desktop lyric window
 iceplayer/mini.py       mini window + about dialog
 iceplayer/widgets.py    hover buttons, scrolling label, seek slider, volume button, dragging
 iceplayer/resources/    skin images (from the original IcePlayer, see Credits)
