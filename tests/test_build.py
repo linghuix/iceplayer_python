@@ -307,7 +307,7 @@ def test_app_version_is_a_valid_msi_version():
     assert 2 <= len(parts) <= 4 and all(p.isdigit() for p in parts)
 
 
-# =============================================================== portable exe
+# =============================================================== portable exe & release
 @pytest.mark.parametrize("porcelain, expected", [("", "-portable"), (" M build.py\n", "-portable-dirty")])
 def test_build_label_marks_uncommitted_builds(monkeypatch, porcelain, expected):
     """Portable files are named <version>-portable, with -dirty when built from
@@ -351,6 +351,22 @@ def test_stop_process_tree_stops_child_processes(tmp_path):
     assert parent.poll() is not None
     assert str(child) not in alive, "child process still running"
 
+
+def test_release_workflow_uploads_exactly_msi_and_portable_exe():
+    """The GitHub workflow builds with --onefile --msi and uploads exactly the MSI and
+    the versioned portable exe: not the raw PyInstaller output (IcePlayer-portable.exe)
+    and not a -dirty test build."""
+    import fnmatch
+    import re
+    text = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "python build.py --skip-tests --onefile --msi" in text
+    line = next(l for l in text.splitlines() if "$files = @(Get-ChildItem" in l)
+    patterns = [p.split("\\")[-1] for p in re.findall(r"dist\\([^,\s|]+)", line)]
+    raw_output = build.ONEFILE_EXE.name              # what PyInstaller writes before renaming
+    names = ["IcePlayer-2.1.3.msi", "IcePlayer-2.1.3-portable.exe", raw_output,
+             "IcePlayer-2.1.3-portable-dirty.exe"]
+    picked = [n for n in names if any(fnmatch.fnmatch(n, p) for p in patterns)]
+    assert picked == ["IcePlayer-2.1.3.msi", "IcePlayer-2.1.3-portable.exe"]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="PATH cleaning only happens on Windows")

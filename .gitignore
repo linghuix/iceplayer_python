@@ -1,5 +1,5 @@
 /.vscode
-# Python caches, anywhere
+# Python caches, anywhere (also created by tests/builds on GitHub Actions)
 __pycache__/
 
 # personal playlist / settings written by the app

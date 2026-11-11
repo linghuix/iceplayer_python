@@ -79,7 +79,7 @@ python run.py "D:/Music/song.mp3"
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 383 tests, about 40 s
+python -m pytest            # 384 tests, about 40 s
 python -m pytest tests/test_lyrics.py -v    # one file, verbose
 ```
 
@@ -96,7 +96,7 @@ your real `IceList.json` and never talk to a player you have open.
 | `tests/test_tags.py` | reading tags with mutagen: GBK / Shift-JIS / UTF-8 tags marked Latin-1 (the garbled-artist bug), real Latin-1 names untouched, Big5 fallback, several artists, album artist, files without tags |
 | `tests/test_mini.py` | about dialog, mini window buttons and menu, syncing with the main window |
 | `tests/test_app.py` | single-instance handoff from a second process, where the playlist is saved, the real `run.py` / `python -m iceplayer` launchers |
-| `tests/test_build.py` | the MSI builder (files, folders, shortcuts, upgrade rules, every wizard dialog and button), `build.py` helpers (version checks, portable naming, clean build PATH, no bundled ICU, stopping the single-file exe's process tree) |
+| `tests/test_build.py` | the MSI builder (files, folders, shortcuts, upgrade rules, every wizard dialog and button), `build.py` helpers (version checks, portable naming, clean build PATH, no bundled ICU, stopping the single-file exe's process tree), the release workflow's upload pattern |
 
 ## Build IcePlayer.exe
 
@@ -176,11 +176,45 @@ The file name gets `-dirty` when built from uncommitted changes, so test builds 
 never mistaken for releases. (`--zip` still packs the folder version as
 `IcePlayer-<version>-portable.zip`, if you prefer that.)
 
+## Releases (MSI + portable exe on GitHub)
+
+`.github/workflows/release.yml` builds and publishes a version automatically. To
+release version 2.1.3:
+
+1. Set `__version__ = "2.1.3"` in `iceplayer/__init__.py`, run `python -m pytest`
+   locally (GitHub's build machines have no sound card, so the audio tests only run
+   on your PC), and commit.
+2. Push the commit and a matching tag:
+
+   ```bash
+   git push origin master
+   ```
+   ```bash
+   git tag -a v2.1.3 -m "IcePlayer 2.1.3: <what changed>"
+   ```
+   ```bash
+   git push origin v2.1.3
+   ```
+
+3. GitHub Actions (the **Actions** tab) then, on a Windows machine:
+   - checks that the tag matches `__version__` (stops if `v2.1.3` ≠ `2.1.3`);
+   - runs the tests that need no sound card;
+   - runs `python build.py --skip-tests --onefile --msi`;
+   - creates the GitHub Release **v2.1.3** (notes taken from the tag message) with
+     `IcePlayer-2.1.3.msi` and `IcePlayer-2.1.3-portable.exe` attached. If the
+     release already exists, its files are replaced.
+
+**Actions → Release → Run workflow** (enter a tag) re-runs it by hand, but only for
+tags whose commit already contains this workflow and the current `build.py` (from
+the first release after it was added). For `v2.1.2`, which is older, attach
+`dist/IcePlayer-2.1.2.msi` by hand on its Release page instead.
+
 ## Layout
 
 ```
 build.py                build IcePlayer.exe (PyInstaller, see "Build IcePlayer.exe")
 msi.py                  turn dist/IcePlayer into the .msi installer (used by build.py --msi)
+.github/workflows/release.yml   build MSI + portable exe and publish a GitHub Release on tag push
 docs/screenshot.png     README picture; docs/make_screenshot.py regenerates it
 IcePlayer.spec          PyInstaller recipe: folder version (used by the MSI)
 IcePlayer-onefile.spec  PyInstaller recipe: single-file portable exe (build.py --onefile)

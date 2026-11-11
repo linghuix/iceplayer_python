@@ -1,0 +1,76 @@
+# Build IcePlayer on GitHub and attach the downloads to a GitHub Release.
+#
+# Runs when a version tag is pushed (e.g. `git tag -a v2.1.3 -m ... && git push origin v2.1.3`),
+# or by hand: Actions tab -> "Release" -> "Run workflow" -> enter an existing tag.
+#
+# The release gets:
+#   IcePlayer-<version>.msi            installer with setup wizard (Program Files, shortcuts)
+#   IcePlayer-<version>-portable.exe   "green" version: ONE exe, no installation, just run it
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and release (e.g. v2.1.2)"
+        required: true
+
+permissions:
+  contents: write          # needed to create the release and upload files
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      QT_QPA_PLATFORM: offscreen      # no screen on the build machine
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"      # msilib (MSI builder) exists only up to 3.12
+
+      - name: Install PySide6, PyInstaller, pytest
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Check the tag matches the program version
+        shell: python
+        run: |
+          import os, sys
+          sys.path.insert(0, ".")
+          from iceplayer import __version__
+          tag = os.environ["TAG"]
+          if tag != f"v{__version__}":
+              sys.exit(f"Tag {tag} does not match iceplayer/__init__.py version {__version__} "
+                       f"(expected tag v{__version__}).")
+          print(f"Tag {tag} matches version {__version__}")
+
+      # GitHub's Windows machines have no sound card, so tests that play audio can't
+      # run there (the double-click tests in test_playlist.py play songs). These need no
+      # audio; run the full suite locally (python -m pytest) before tagging.
+      - name: Tests that don't need a sound card
+        run: python -m pytest -q tests/test_build.py tests/test_playlist.py tests/test_lyrics.py tests/test_widgets.py -k "not double_click"
+
+      - name: Build the MSI and the single-file portable exe
+        run: python build.py --skip-tests --onefile --msi
+
+      - name: Create or update the GitHub Release
+        shell: pwsh
+        run: |
+          # IcePlayer-<version>.msi and IcePlayer-<version>-portable.exe (not the raw
+          # PyInstaller output dist\IcePlayer-portable.exe)
+          $files = @(Get-ChildItem dist\IcePlayer-*.msi, dist\IcePlayer-*-portable.exe | ForEach-Object FullName)
+          if ($files.Count -ne 2) { throw "expected 1 msi + 1 portable exe, found: $files" }
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG @files --clobber          # release exists: replace files
+          } else {
+            gh release create $env:TAG @files --title "IcePlayer $($env:TAG.TrimStart('v'))" --notes-from-tag
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh failed" }
