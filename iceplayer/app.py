@@ -1,0 +1,153 @@
+"""Entry point: application start-up and the "only one player at a time" rule.
+
+How the single-instance rule works:
+1. On start, ``send_to_running_instance`` tries to connect to a local pipe named
+   ``SERVER_NAME``. If a player is already listening there, the new launch sends it
+   the file to play (one line of text), waits for the reply "ok", and exits.
+2. Otherwise this launch becomes the player and calls ``start_server`` to listen on
+   that pipe for later launches.
+"""
+import os
+import sys
+from pathlib import Path
+
+from PySide6.QtCore import QCoreApplication
+from PySide6.QtGui import QFont, QIcon
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from PySide6.QtWidgets import QApplication
+
+from .player import IcePlayer
+from .widgets import FONT_FAMILY, res
+
+def _app_dir() -> Path:
+    """Find the folder the playlist file is kept in.
+
+    Returns:
+        The folder of IcePlayer.exe when running as a packaged .exe (PyInstaller sets
+        ``sys.frozen``), otherwise the ``iceplayer_py`` folder.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+# Both can be overridden (used by the tests so they never touch the real playlist).
+SERVER_NAME = os.environ.get("ICEPLAYER_SERVER", "iceplayer-python")   # local pipe name
+STATE_FILE = Path(os.environ.get("ICEPLAYER_STATE", _app_dir() / "IceList.json"))
+
+
+ACK = b"ok"   # reply the running player sends after it has read a message
+
+
+def send_to_running_instance(message: str) -> bool:
+    """If another IcePlayer is running, hand it our file argument.
+
+    The message is one newline-terminated line. We wait for the running instance to
+    reply "ok" before disconnecting: on Windows, disconnecting straight after writing
+    can drop the message before the other side has read it.
+
+    Args:
+        message: Song path to play, or "" to just bring the running window to the front.
+
+    Returns:
+        True if a player is already running (this launch should exit), False if none is
+        running (this launch should open its own window). Connecting gives up after
+        0.3 s; waiting for "ok" after 3 s.
+    """
+    sock = QLocalSocket()
+    sock.connectToServer(SERVER_NAME)
+    if not sock.waitForConnected(300):
+        return False
+    sock.write((message + "\n").encode("utf-8"))
+    sock.flush()
+    reply = b""
+    while ACK not in reply and sock.waitForReadyRead(3000):
+        reply += bytes(sock.readAll())
+    sock.disconnectFromServer()
+    return True  # an instance is running either way; never start a second one
+
+
+def start_server(player: IcePlayer) -> QLocalServer:
+    """Listen for later launches and pass their files to this player.
+
+    Args:
+        player: The main window. For each message it is brought to the front, and a
+                non-empty path is opened and played with ``player.open_and_play``.
+
+    Returns:
+        The listening QLocalServer (owned by ``player``). A pipe left behind by a
+        crashed instance is removed first.
+    """
+    server = QLocalServer(player)
+    QLocalServer.removeServer(SERVER_NAME)  # clean up after a crashed instance
+
+    def on_connection():
+        """Server callback: serve every newly connected launch."""
+        while server.hasPendingConnections():
+            _serve(server.nextPendingConnection())
+
+    def _serve(sock: QLocalSocket):
+        """Read one message line from a connected launch, reply "ok" and act on it.
+
+        Args:
+            sock: The connection. Data may arrive in pieces, so it is buffered until
+                  the newline; the socket deletes itself when the sender disconnects.
+        """
+        buffer = bytearray()
+
+        def read():
+            """Socket callback: collect data; once a full line is in, handle it once."""
+            buffer.extend(bytes(sock.readAll()))
+            if b"\n" not in buffer:
+                return  # wait for the rest of the line
+            sock.readyRead.disconnect(read)
+            sock.write(ACK)
+            sock.flush()
+            path = bytes(buffer).split(b"\n", 1)[0].decode("utf-8", errors="replace").strip()
+            player.bring_to_front()
+            if path:
+                player.open_and_play(path)
+
+        sock.disconnected.connect(sock.deleteLater)
+        sock.readyRead.connect(read)
+        if sock.bytesAvailable():
+            read()
+
+    server.newConnection.connect(on_connection)
+    server.listen(SERVER_NAME)
+    return server
+
+
+def main() -> int:
+    """Start IcePlayer.
+
+    Inputs (from the command line): ``sys.argv[1]``, optional path of a song to play.
+
+    Returns:
+        The process exit code: 0 if the file was handed to an already running player,
+        otherwise the Qt event loop's exit code when the window is closed.
+    """
+    QCoreApplication.setApplicationName("IcePlayer")
+    app = QApplication(sys.argv)
+    app.setApplicationDisplayName("冰点播放器")
+    app.setStyle("Fusion")  # flat table rows like the original, not the rounded Win11 style
+    app.setFont(QFont(FONT_FAMILY, 9))
+    icon = QIcon()
+    for size in (16, 32, 48):
+        icon.addFile(res(f"logo-{size}.png"))
+    app.setWindowIcon(icon)
+
+    file_arg = sys.argv[1] if len(sys.argv) > 1 else ""
+    if send_to_running_instance(file_arg):
+        return 0
+
+    player = IcePlayer(STATE_FILE)
+    start_server(player)
+    player.show()
+    if file_arg:
+        player.open_and_play(file_arg)
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

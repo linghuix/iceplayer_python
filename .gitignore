@@ -1,0 +1,9 @@
+/.vscode
+/iceplayer/__pycache__
+/tests/__pycache__
+
+# personal playlist / settings written by the app
+/IceList.json
+# PyInstaller output
+/build/
+/dist/

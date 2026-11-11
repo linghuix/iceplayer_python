@@ -1,0 +1,3 @@
+# 6.8.3 is the tested version. 6.12 fails to load ("DLL load failed") on Miniconda Pythons
+# whose bundled MSVC runtime is older than that Qt build needs.
+PySide6==6.8.3
