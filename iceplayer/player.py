@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFileDialog, QFr
                                QLabel, QMenu, QSlider, QTableWidget, QTableWidgetItem,
                                QWidget)
 
-from .lyrics import (Lyrics, LyricWindow, guess_title_artist, load_lrc_for, parse_lrc,
+from .lyrics import (Lyrics, LyricWindow, guess_title_artist, load_lrc_for, log, parse_lrc,
                      save_lrc_for, search_lrclib)
 from .mini import AboutDialog, MiniWindow
 from .playlist import (AUDIO_EXTENSIONS, MODE_NAMES, PlayMode, is_audio, load_state,
@@ -761,6 +761,7 @@ class IcePlayer(DraggableMixin, QWidget):
         current song has no lyric file, the lyrics are searched online
         (``search_online_lyrics``)."""
         self.lyric_window.setVisible(self.lyric_window.isHidden())
+        log.info("[歌词] 歌词按钮: %s歌词栏", "显示" if self.lyric_window.isVisible() else "隐藏")
         if self.lyric_window.isVisible() and not getattr(self, "_lyric_placed", False):
             screen = self.screen().availableGeometry()
             self.lyric_window.move(screen.center().x() - 400, screen.bottom() - 140)
@@ -780,13 +781,24 @@ class IcePlayer(DraggableMixin, QWidget):
         Returns:
             True if a search was started.
         """
-        if self.current_index < 0 or self.lyrics:
+        if self.current_index < 0:
+            log.info("[歌词] 没有选中歌曲，不搜索")
             return False
         path = self.files[self.current_index]
-        if Path(path).with_suffix(".lrc").is_file() or path == self._lyrics_searched_for:
+        lrc = Path(path).with_suffix(".lrc")
+        if self.lyrics:
+            log.info("[歌词] %s 已有歌词 (%s)，不搜索", Path(path).name, lrc.name)
+            return False
+        if lrc.is_file():
+            log.info("[歌词] 已有歌词文件 %s，但里面没有带时间的歌词行，不搜索", lrc)
+            return False
+        if path == self._lyrics_searched_for:
+            log.info("[歌词] %s 已经搜索过，不再搜索", Path(path).name)
             return False
         self._lyrics_searched_for = path
         title, artist = guess_title_artist(self._tag_title, self._tag_artist, Path(path).stem)
+        log.info("[歌词] %s 没有歌词文件，开始在线搜索 (标签: 歌名=%r 歌手=%r)", Path(path).name,
+                 self._tag_title, self._tag_artist)
         self.lyric_window.set_text(LYRIC_SEARCHING)
         self._lyric_message_shown = True
         self.lyric_search.start(path, title, artist, max(0, self.media.duration()))
@@ -806,17 +818,25 @@ class IcePlayer(DraggableMixin, QWidget):
         歌词搜索失败，请检查网络, and the next click on the lyric button tries again.
         """
         if self.current_index < 0 or self.files[self.current_index] != path:
+            log.info("[歌词] 已换歌，忽略 %s 的搜索结果", Path(path).name)
             return
         if lrc:
-            save_lrc_for(path, lrc)
+            target = Path(path).with_suffix(".lrc")
+            if save_lrc_for(path, lrc):
+                log.info("[歌词] 已保存到 %s", target)
+            else:
+                log.info("[歌词] 无法保存 %s (文件夹不可写或文件已存在)，只显示不保存", target)
             self.lyrics = Lyrics(parse_lrc(lrc))
+            log.info("[歌词] 显示 %d 行歌词", len(self.lyrics.entries))
             line = self.lyrics.line_at(self.media.position())
             self.lyric_window.set_text(line if line is not None else
                                        (self._tag_title or Path(path).stem))
         elif error:
+            log.info("[歌词] 搜索失败: %s (下次显示歌词栏时重试)", error)
             self._lyrics_searched_for = None
             self.lyric_window.set_text(LYRIC_FAILED)
         else:
+            log.info("[歌词] 没有找到带时间轴的歌词")
             self.lyric_window.set_text(LYRIC_NOT_FOUND)
 
     def enter_mini_mode(self):

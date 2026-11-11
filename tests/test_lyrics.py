@@ -321,3 +321,38 @@ def test_save_lrc_for_unwritable_folder(tmp_path):
     """Input: a song in a folder that doesn't exist (stands in for read-only).
     Expected: False, no exception."""
     assert save_lrc_for(str(tmp_path / "missing" / "s.wav"), SUNNY) is False
+
+
+def test_search_lrclib_logs_url_and_results(lrclib, caplog):
+    """The console shows the search: title/artist, the address (readable and
+    URL-encoded), the server's answer, each result, and which one was chosen.
+
+    Input: 晴天 / 周杰伦 (270 s); lrclib returns a live version without times and the
+    album version. Expected messages for all of these."""
+    import logging
+    caplog.set_level(logging.INFO, logger="iceplayer.lyrics")
+    lrclib.results = [
+        {"id": 1, "trackName": "晴天", "artistName": "周杰伦", "albumName": "Live",
+         "duration": 299.0, "syncedLyrics": None},
+        {"id": 2, "trackName": "晴天", "artistName": "周杰伦", "albumName": "叶惠美",
+         "duration": 270.0, "syncedLyrics": SUNNY}]
+    search_lrclib("晴天", "周杰伦", 270_000)
+    text = caplog.text
+    assert "搜索: 歌名=晴天  歌手=周杰伦" in text
+    assert "?track_name=晴天&artist_name=周杰伦" in text                  # readable
+    assert "track_name=%E6%99%B4%E5%A4%A9" in text                       # as sent
+    assert "HTTP 200" in text
+    assert "2 个结果，其中 1 个带时间轴" in text
+    assert "1. id=1  周杰伦 - 晴天  《Live》  299.0 秒  无时间轴" in text
+    assert "2. id=2  周杰伦 - 晴天  《叶惠美》  270.0 秒  带时间轴" in text
+    assert "选中 id=2" in text and "歌曲 270 秒" in text
+
+
+def test_search_log_lists_at_most_ten_results(lrclib, caplog):
+    """Input: 25 results. Expected: 10 listed, then "... 还有 15 个"."""
+    import logging
+    caplog.set_level(logging.INFO, logger="iceplayer.lyrics")
+    lrclib.results = [{"id": i, "syncedLyrics": SUNNY} for i in range(25)]
+    search_lrclib("x")
+    assert "10. id=9" in caplog.text and "11. id=10" not in caplog.text
+    assert "还有 15 个" in caplog.text

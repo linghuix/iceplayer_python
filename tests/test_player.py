@@ -1234,6 +1234,45 @@ def test_online_lyrics_from_mini_window_menu(player, songs, lrclib):
     assert wait_until(lambda: bool(player.lyrics))
     assert lrclib.requests[0]["track_name"] == "gamma"
 
+def test_lyric_search_console_messages(player, songs, music_dir, lrclib, caplog):
+    """Clicking the lyric button prints what happens: the click, why it searches,
+    the address, the result and where the .lrc was saved. A second song with its own
+    .lrc says it doesn't search."""
+    import logging
+    caplog.set_level(logging.INFO, logger="iceplayer")
+    lrclib.results = [{"id": 7, "duration": 1.0, "syncedLyrics": ONLINE_LRC}]
+    player.add_files(songs)
+    player.play_index(0)
+    player.lyric_button.click()
+    assert wait_until(lambda: bool(player.lyrics))
+    text = caplog.text
+    assert "歌词按钮: 显示歌词栏" in text
+    assert "alpha.wav 没有歌词文件，开始在线搜索" in text
+    assert "网址: http://127.0.0.1:" in text and "track_name=alpha" in text
+    assert "选中 id=7" in text
+    assert f"已保存到 {music_dir / 'alpha.lrc'}" in text
+    assert "显示 2 行歌词" in text
+    caplog.clear()
+    player.play_index(1)
+    player.lyric_button.click()                  # hide
+    player.lyric_button.click()                  # show
+    assert "歌词按钮: 隐藏歌词栏" in caplog.text
+    assert "已有歌词" in caplog.text and "不搜索" in caplog.text
+
+
+@pytest.mark.parametrize("status, expected", [(500, "搜索失败"), (200, "没有找到带时间轴的歌词")],
+                         ids=["failed", "not-found"])
+def test_lyric_search_console_messages_when_nothing_found(player, songs, lrclib, caplog,
+                                                          status, expected):
+    """A failed search and an empty answer each print their reason."""
+    import logging
+    caplog.set_level(logging.INFO, logger="iceplayer")
+    lrclib.status = status
+    player.add_files(songs)
+    player.play_index(0)
+    player.toggle_lyrics()
+    assert wait_until(lambda: expected in caplog.text)
+
 # =============================================================== 10. other windows & buttons
 def test_toggle_lyrics(player):
     """The lyric button shows the lyric bar; pressing again hides it."""

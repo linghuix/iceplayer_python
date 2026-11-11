@@ -294,3 +294,29 @@ def test_python_m_iceplayer_starts(launch_env):
     finally:
         proc.kill()
         proc.wait(10)
+
+
+def test_setup_console_log(monkeypatch):
+    """With a console, IcePlayer's INFO messages are printed once (calling it twice adds
+    no second printer); the packaged exe has no console (sys.stderr is None) and then
+    nothing is set up."""
+    import io
+    import logging
+    from iceplayer import app as app_mod
+    logger = logging.getLogger("iceplayer")
+    before = list(logger.handlers)
+    fake = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+    monkeypatch.setattr(app_mod.sys, "stderr", fake)
+    try:
+        assert app_mod.setup_console_log() and app_mod.setup_console_log()
+        added = [h for h in logger.handlers if h not in before]
+        assert len(added) == 1
+        logging.getLogger("iceplayer.lyrics").info("[歌词] hello")
+        added[0].flush()
+        assert "[歌词] hello" in fake.buffer.getvalue().decode("utf-8")
+    finally:
+        for h in logger.handlers[:]:
+            if h not in before:
+                logger.removeHandler(h)
+    monkeypatch.setattr(app_mod.sys, "stderr", None)
+    assert app_mod.setup_console_log() is False

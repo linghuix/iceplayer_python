@@ -52,6 +52,10 @@ python run.py "D:/Music/song.mp3"
   it, so later plays work offline. The bar shows 正在搜索歌词… meanwhile, then
   没有找到歌词 (not searched again for that song) or 歌词搜索失败，请检查网络 (tried
   again next time the bar is shown). Only the title and artist are sent.
+  Started from a console (`python run.py`, VS Code), every step is printed as
+  `12:34:56 [歌词] ...`: the address searched, each result (album, length, timed or
+  not), the one chosen and where the `.lrc` was saved. The packaged exe has no
+  console and prints nothing.
 - Cover art comes from `song.jpg` next to the song, then from art embedded in the
   file, then the default image.
 - Mini mode: a 100×100 floating button. Right-click it for the menu; double-click
@@ -76,7 +80,7 @@ python run.py "D:/Music/song.mp3"
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 384 tests, about 50 s
+python -m pytest            # 390 tests, about 50 s
 python -m pytest tests/test_lyrics.py -v    # one file, verbose
 ```
 
