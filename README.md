@@ -1,7 +1,15 @@
 # IcePlayer (冰点播放器), Python + Qt
 
-A Python / PySide6 (Qt 6) version of the C++/Qt5 IcePlayer in `../ICEPLAYER`.
-It uses the same skin images, window layout and behaviour.
+<p align="center">
+  <img src="docs/screenshot.png" alt="IcePlayer main window: song title, artist and album, progress bar, playback buttons and the playlist" width="380">
+</p>
+
+A Python / PySide6 (Qt 6) version of **[IcePlayer](https://github.com/FreedomZZQ/IcePlayer)**
+by [FreedomZZQ](https://github.com/FreedomZZQ), a C++/Qt5 music player. This project is based on it and keeps its skin images,
+window layout and behaviour.
+
+*The screenshot uses made-up demo songs. Regenerate it after UI changes with
+`python docs/make_screenshot.py`.*
 
 ## Run
 
@@ -136,6 +144,7 @@ msiexec /x dist\IcePlayer-2.1.2.msi /qn
 ```
 build.py                build IcePlayer.exe (PyInstaller, see "Build IcePlayer.exe")
 msi.py                  turn dist/IcePlayer into the .msi installer (used by build.py --msi)
+docs/screenshot.png     README picture; docs/make_screenshot.py regenerates it
 IcePlayer.spec          PyInstaller recipe used by build.py
 run.py                  launcher
 iceplayer/app.py        startup + single-instance (QLocalServer)
@@ -144,5 +153,20 @@ iceplayer/playlist.py   play-mode logic, saving
 iceplayer/lyrics.py     LRC parser + desktop lyric window
 iceplayer/mini.py       mini window + about dialog
 iceplayer/widgets.py    hover buttons, scrolling label, seek slider, volume button, dragging
-iceplayer/resources/    skin images (copied from ../ICEPLAYER/Resources)
+iceplayer/resources/    skin images (from the original IcePlayer, see Credits)
 ```
+
+## Credits
+
+- Based on **[IcePlayer](https://github.com/FreedomZZQ/IcePlayer)** by
+  [FreedomZZQ](https://github.com/FreedomZZQ) (C++ / Qt5). The skin images in
+  `iceplayer/resources/`, the window layout and the player's behaviour come from it.
+- This version rewrites the program in Python with PySide6 (Qt 6) and adds tests,
+  the build script and the MSI installer.
+
+> **致原作者 / To the original author:** 本项目基于 [FreedomZZQ/IcePlayer](https://github.com/FreedomZZQ/IcePlayer)
+> 修改而来。如果侵犯了你的版权，请告诉我（例如在本仓库提 issue），我会立刻删除本项目。
+>
+> This project is based on FreedomZZQ/IcePlayer. If it infringes your copyright,
+> please let me know (for example by opening an issue in this repository) and I will
+> delete this project immediately.
