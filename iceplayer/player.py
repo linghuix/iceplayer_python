@@ -23,6 +23,7 @@ from .lyrics import Lyrics, LyricWindow, load_lrc_for
 from .mini import AboutDialog, MiniWindow
 from .playlist import (AUDIO_EXTENSIONS, MODE_NAMES, PlayMode, is_audio, load_state,
                        next_index, previous_index, save_state)
+from .tags import Tags, read_tags
 from .widgets import (FONT_FAMILY, MENU_STYLE, SLIDER_STYLE, DraggableMixin, IceButton,
                       NoFocusDelegate, PlaylistTable, ScrollingLabel, SeekSlider, VolumeButton,
                       pixmap)
@@ -101,6 +102,7 @@ class IcePlayer(DraggableMixin, QWidget):
         self.current_index = -1
         self.play_mode = PlayMode.SINGLE
         self.lyrics = Lyrics()
+        self._file_tags = Tags()           # current song's tags read by mutagen
         self._background = pixmap("background.png")
         self._default_cover = pixmap("default_album.jpg")
 
@@ -635,15 +637,20 @@ class IcePlayer(DraggableMixin, QWidget):
     def _on_metadata(self):
         """Media callback: the song's tags were read. Shows title (or file name), artist
         (or 未知音乐家), album (or 未知专辑); uses embedded cover art if there is no
-        song.jpg. Ignored when no song is selected."""
+        song.jpg. Ignored when no song is selected.
+
+        The texts come from mutagen (``read_tags``, read when the song was loaded),
+        which repairs old Chinese/Japanese tags that Qt shows garbled; Qt's own values
+        are only used for files mutagen can't read."""
         if self.current_index < 0:
             return
         md = self.media.metaData()
         path = Path(self.files[self.current_index])
-        title = md.stringValue(QMediaMetaData.Key.Title) or path.stem
-        artist = (md.stringValue(QMediaMetaData.Key.ContributingArtist)
+        tags = self._file_tags
+        title = tags.title or md.stringValue(QMediaMetaData.Key.Title) or path.stem
+        artist = (tags.artist or md.stringValue(QMediaMetaData.Key.ContributingArtist)
                   or md.stringValue(QMediaMetaData.Key.AlbumArtist) or "未知音乐家")
-        album = md.stringValue(QMediaMetaData.Key.AlbumTitle) or "未知专辑"
+        album = tags.album or md.stringValue(QMediaMetaData.Key.AlbumTitle) or "未知专辑"
         self._set_title(title)
         self.artist_label.setText(artist)
         self.album_label.setText(album)
@@ -665,6 +672,7 @@ class IcePlayer(DraggableMixin, QWidget):
                   (default cover if there is no .jpg).
         """
         self.lyrics = Lyrics(load_lrc_for(path))
+        self._file_tags = read_tags(path)     # title/artist/album via mutagen (fast)
         self._set_title(Path(path).stem)
         self.artist_label.setText("")
         self.album_label.setText("")
@@ -696,6 +704,7 @@ class IcePlayer(DraggableMixin, QWidget):
         self.progress.setValue(0)
         self.progress.setEnabled(False)
         self.lyrics = Lyrics()
+        self._file_tags = Tags()
         self.lyric_window.set_text("冰点播放器")
 
     # ---------------------------------------------------------- windows etc.

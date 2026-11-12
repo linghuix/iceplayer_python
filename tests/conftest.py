@@ -121,8 +121,12 @@ def _id3_frame(frame_id: str, payload: bytes) -> bytes:
     return frame_id.encode("ascii") + struct.pack(">I", len(payload)) + b"\0\0" + payload
 
 
-def _id3_text(frame_id: str, text: str) -> bytes:
-    """An ID3v2.3 text frame (TIT2 title, TPE1 artist, TALB album) in UTF-16."""
+def _id3_text(frame_id: str, text: str, gbk: bool = False) -> bytes:
+    """An ID3v2.3 text frame (TIT2 title, TPE1 artist, TALB album) in UTF-16, or with
+    ``gbk=True`` as GBK bytes marked Latin-1 (encoding byte 0), like many old Chinese
+    MP3s; Qt then shows 我很快乐 as "ÎÒºÜ¿ìÀÖ"."""
+    if gbk:
+        return _id3_frame(frame_id, b"\x00" + text.encode("gbk"))
     return _id3_frame(frame_id, b"\x01" + text.encode("utf-16"))
 
 
@@ -176,7 +180,7 @@ def _lame_info_frame(audio_frames: int, delay: int = 576, padding: int = 732) ->
 
 def make_mp3(path: Path, seconds: float = 2.0, title: str | None = None,
              artist: str | None = None, album: str | None = None,
-             cover: bytes | None = None, lame_header: bool = False):
+             cover: bytes | None = None, lame_header: bool = False, gbk_tags: bool = False):
     """Write a real, playable MP3 file (silent audio), optionally with ID3 tags, an
     embedded cover picture and a LAME header, without needing any MP3 encoder.
 
@@ -194,6 +198,7 @@ def make_mp3(path: Path, seconds: float = 2.0, title: str | None = None,
         lame_header: Start the audio with a LAME "Info" frame (encoder delay 576),
                  like files from iTunes, foobar2000 or most music stores.
                  cover + lame_header together froze playback at 0:00 on Qt 6.8.
+        gbk_tags: Write the text tags as GBK bytes marked Latin-1 (see ``_id3_text``).
 
     Returns:
         ``path``.
@@ -205,11 +210,11 @@ def make_mp3(path: Path, seconds: float = 2.0, title: str | None = None,
         audio = _lame_info_frame(count) + audio
     frames = b""
     if title is not None:
-        frames += _id3_text("TIT2", title)
+        frames += _id3_text("TIT2", title, gbk_tags)
     if artist is not None:
-        frames += _id3_text("TPE1", artist)
+        frames += _id3_text("TPE1", artist, gbk_tags)
     if album is not None:
-        frames += _id3_text("TALB", album)
+        frames += _id3_text("TALB", album, gbk_tags)
     if cover is not None:
         # encoding(0) + MIME + NUL + picture type 3 (front cover) + empty description + data
         frames += _id3_frame("APIC", b"\x00image/jpeg\x00\x03\x00" + cover)

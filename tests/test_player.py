@@ -1098,6 +1098,35 @@ def test_reset_info(player, songs):
     assert player.lyric_window.text() == "冰点播放器" and player.time_label.text() == "00:00"
 
 
+def test_gbk_tags_shown_correctly(player, music_dir):
+    """An MP3 whose tags are GBK bytes marked Latin-1 (common in Chinese MP3s; Qt
+    reads 我很快乐 as "ÎÒºÜ¿ìÀÖ"). Expected: the real title, artist and album."""
+    song = make_mp3(music_dir / "gbk.mp3", 2, title="我很快乐", artist="刘惜君",
+                    album="我很快乐专辑", gbk_tags=True)
+    player.add_files([str(song)])
+    player.play_index(0)
+    assert wait_until(lambda: player.artist_label.text() == "刘惜君")
+    assert player.name_label.text() == "我很快乐"
+    assert player.album_label.text() == "我很快乐专辑"
+
+
+def test_reported_garbled_artist_shown_correctly(player, music_dir):
+    """The reported file "松田聖子 - Rock’n Rouge.mp3": its tags are GBK marked Latin-1
+    and 聖 is GBK C2 7D, so Qt shows the artist as "ËÉÌïÂ}×Ó". Expected: the window
+    shows 松田聖子 / Rock’n Rouge / Tinker Bell (tags read with mutagen)."""
+    from mutagen.id3 import ID3, TALB, TIT2, TPE1
+    song = make_mp3(music_dir / "rouge.mp3", 2)
+    id3 = ID3()
+    id3.add(TIT2(encoding=0, text=[b"Rock\xa1\xafn Rouge".decode("latin-1")]))
+    id3.add(TPE1(encoding=0, text=[b"\xcb\xc9\xcc\xef\xc2}\xd7\xd3".decode("latin-1")]))
+    id3.add(TALB(encoding=0, text=["Tinker Bell"]))
+    id3.save(str(song), v2_version=3)
+    player.add_files([str(song)])
+    player.play_index(0)
+    assert wait_until(lambda: player.artist_label.text() == "松田聖子")
+    assert player.name_label.text() == "Rock’n Rouge"
+    assert player.album_label.text() == "Tinker Bell"
+
 # =============================================================== 10. other windows & buttons
 def test_toggle_lyrics(player):
     """The lyric button shows the lyric bar; pressing again hides it."""

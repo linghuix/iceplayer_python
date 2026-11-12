@@ -5,3 +5,7 @@
 # - 6.12 fails to load ("DLL load failed") on Pythons whose bundled MSVC runtime is
 #   older than that Qt build needs (e.g. Miniconda base).
 PySide6==6.10.2
+
+# Reads song tags (title/artist/album) and repairs old GBK / Shift-JIS tags that
+# Qt shows garbled (iceplayer/tags.py). Pure Python.
+mutagen>=1.47
