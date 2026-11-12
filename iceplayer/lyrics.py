@@ -8,7 +8,7 @@
 
 Online lyrics (used when a song has no .lrc file, see ``IcePlayer.toggle_lyrics``):
 
-* ``guess_title_artist``  title/artist for the search, also from "Artist - Title" file names.
+* ``search_terms``        title/artist for the search (from the tags, never split from the file name).
 * ``search_lrclib``       ask lrclib.net for timed lyrics.
 * ``pick_lyrics``         choose the best of lrclib's results.
 * ``save_lrc_for``        write them as ``song.lrc`` so the next play needs no internet.
@@ -136,29 +136,23 @@ TITLE_ONLY_MAX_DIFF_MS = 10_000
 log = logging.getLogger("iceplayer.lyrics")
 
 
-def guess_title_artist(title: str, artist: str, file_stem: str) -> tuple[str, str]:
+def search_terms(title: str, artist: str, file_stem: str) -> tuple[str, str]:
     """Decide what to search for.
 
     Args:
         title:     Title tag, or "" when the song has none.
         artist:    Artist tag, or "" / "未知音乐家" when the song has none.
-        file_stem: File name without extension, e.g. "周杰伦 - 晴天".
+        file_stem: File name without extension, e.g. "布拉格广场 - 蔡依林,周杰伦".
 
     Returns:
-        ``(title, artist)``. Tags win. Without a title tag, a file name like
-        "Artist - Title" is split into both parts; otherwise the whole file name is the
-        title. The artist is "" when unknown (then only the title is searched).
+        ``(title, artist)`` from the tags. The file name is never split into title and
+        artist (names are written in both orders, "Artist - Title" and "Title -
+        Artist"). Only when there is no title tag is the whole file name used as the
+        title. The artist is "" when there is no artist tag (then only the title is
+        searched).
     """
     artist = "" if artist.strip() == UNKNOWN_ARTIST else artist.strip()
-    title = title.strip()
-    if not title:
-        left, sep, right = file_stem.partition(" - ")
-        if sep and left.strip() and right.strip():
-            title = right.strip()
-            artist = artist or left.strip()
-        else:
-            title = file_stem.strip()
-    return title, artist
+    return title.strip() or file_stem.strip(), artist
 
 
 def pick_lyrics(results: list, duration_ms: int = 0, max_diff_ms: int = 0) -> str | None:

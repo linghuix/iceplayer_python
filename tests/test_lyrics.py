@@ -11,7 +11,7 @@ What is tested
 4. ``Lyrics``       Picking the line that should show at a given playback position.
 5. ``LyricWindow``  The 800x80 always-on-top lyric bar: size, flags, text, painting,
                     and its right-click "隐藏" (hide) menu.
-6. Online lyrics    ``guess_title_artist`` (what to search for), ``pick_lyrics`` (best
+6. Online lyrics    ``search_terms`` (what to search for), ``pick_lyrics`` (best
                     of lrclib's results), ``search_lrclib`` (the request, against a
                     fake local server, never the real internet) and ``save_lrc_for``.
 
@@ -210,24 +210,27 @@ def test_lyric_window_context_menu_hides(qapp):
 
 
 # =============================================================== 6. online lyrics (lrclib.net)
-from iceplayer.lyrics import (guess_title_artist, pick_lyrics, save_lrc_for,  # noqa: E402
-                              search_lrclib)
+from iceplayer.lyrics import (pick_lyrics, save_lrc_for, search_lrclib,  # noqa: E402
+                              search_terms)
 
 SUNNY = "[00:28.90] 故事的小黃花\n[00:32.73] 從出生那年就飄著\n"
 LIVE = "[00:01.00] live version\n"
 
 
 @pytest.mark.parametrize("title, artist, stem, expected", [
-    ("晴天", "周杰伦", "track01", ("晴天", "周杰伦")),          # tags win
-    ("", "未知音乐家", "周杰伦 - 晴天", ("晴天", "周杰伦")),     # "Artist - Title" file name
-    ("", "", "晴天", ("晴天", "")),                             # just a title
-    ("晴天", "未知音乐家", "x - y", ("晴天", "")),              # placeholder artist is not searched
-    ("", "Tag Artist", "Other - Song", ("Song", "Tag Artist")),  # artist tag beats file name
-    ("  Song  ", " Band ", "s", ("Song", "Band")),              # spaces trimmed
+    ("晴天", "周杰伦", "track01", ("晴天", "周杰伦")),                   # tags win
+    ("布拉格广场", "蔡依林,周杰伦", "布拉格广场 - 蔡依林,周杰伦",
+     ("布拉格广场", "蔡依林,周杰伦")),
+    ("", "未知音乐家", "布拉格广场 - 蔡依林,周杰伦",
+     ("布拉格广场 - 蔡依林,周杰伦", "")),                                # file name NOT split
+    ("", "", "周杰伦 - 晴天", ("周杰伦 - 晴天", "")),                    # either order
+    ("晴天", "未知音乐家", "x", ("晴天", "")),                           # placeholder artist
+    ("  Song  ", " Band ", "s", ("Song", "Band")),                       # spaces trimmed
 ])
-def test_guess_title_artist(title, artist, stem, expected):
-    """Input: title tag, artist tag, file name. Expected: (title, artist) to search for."""
-    assert guess_title_artist(title, artist, stem) == expected
+def test_search_terms(title, artist, stem, expected):
+    """Input: title tag, artist tag, file name. Expected: (title, artist) from the tags;
+    the file name is never split, only used whole when there is no title tag."""
+    assert search_terms(title, artist, stem) == expected
 
 
 def test_pick_lyrics_prefers_matching_duration():

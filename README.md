@@ -47,7 +47,9 @@ python run.py "D:/Music/song.mp3"
   UTF-8, UTF-16 and GBK files are all supported. Right-click the bar to hide it.
 - Online lyrics: if the song has no `song.lrc`, showing the lyric bar (lyric button,
   or 桌面歌词 in the mini window) searches [lrclib.net](https://lrclib.net) in the
-  background, by title + artist from the tags, or from an "Artist - Title" file name.
+  background, by title + artist from the song's tags. The file name is never split
+  into title and artist; it is only used, whole, as the title when there is no
+  title tag.
   If title + artist find nothing (e.g. the tag says "Jay Chou" but lrclib has
   周杰伦), it searches again by title only, and then accepts only versions within
   10 s of the song's length, so a different song with the same name isn't used.

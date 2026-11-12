@@ -21,8 +21,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFileDialog, QFr
                                QLabel, QMenu, QSlider, QTableWidget, QTableWidgetItem,
                                QWidget)
 
-from .lyrics import (Lyrics, LyricWindow, guess_title_artist, load_lrc_for, log, parse_lrc,
-                     save_lrc_for, search_lrclib)
+from .lyrics import (Lyrics, LyricWindow, load_lrc_for, log, parse_lrc,
+                     save_lrc_for, search_lrclib, search_terms)
 from .mini import AboutDialog, MiniWindow
 from .playlist import (AUDIO_EXTENSIONS, MODE_NAMES, PlayMode, is_audio, load_state,
                        next_index, previous_index, save_state)
@@ -812,8 +812,9 @@ class IcePlayer(DraggableMixin, QWidget):
 
         Searches only when a song is loaded, it has no lyrics yet, there is no
         ``song.lrc`` next to it, and it wasn't already searched for (a failed search,
-        e.g. without internet, may be retried). Title and artist come from the tags,
-        or from an "Artist - Title" file name (``guess_title_artist``). The lyric bar
+        e.g. without internet, may be retried). Title and artist come from the tags
+        (the whole file name is the title only if there is no title tag; see
+        ``search_terms``). The lyric bar
         shows 正在搜索歌词… until ``_on_online_lyrics`` gets the answer.
 
         Returns:
@@ -834,7 +835,7 @@ class IcePlayer(DraggableMixin, QWidget):
             log.info("[歌词] %s 已经搜索过，不再搜索", Path(path).name)
             return False
         self._lyrics_searched_for = path
-        title, artist = guess_title_artist(self._tag_title, self._tag_artist, Path(path).stem)
+        title, artist = search_terms(self._tag_title, self._tag_artist, Path(path).stem)
         log.info("[歌词] %s 没有歌词文件，开始在线搜索 (标签: 歌名=%r 歌手=%r)", Path(path).name,
                  self._tag_title, self._tag_artist)
         self.lyric_window.set_text(LYRIC_SEARCHING)
