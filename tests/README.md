@@ -1,8 +1,11 @@
 # IcePlayer tests
 
-384 automated tests that check every part of the player: lyric files, play modes,
+436 automated tests that check every part of the player: lyric files, play modes,
 the saved playlist, every button and menu, real audio playback (WAV and MP3), the
-mini window, and the real `run.py` launcher. A full run takes about 30 seconds.
+mini window, and the real `run.py` launcher. A full run takes about 75 seconds.
+
+No test uses the internet: the online lyric search (lrclib.net) is answered by a fake
+server inside the tests (the `lrclib` fixture in `conftest.py`).
 
 ## How to run
 
@@ -17,7 +20,7 @@ conda activate qtapp
 python -m pytest
 ```
 
-You should see a row of dots and finally `384 passed`. Each dot is one passed test;
+You should see a row of dots and finally `436 passed`. Each dot is one passed test;
 `F` is a failure and `E` is an error in the test setup.
 
 ### In VS Code
@@ -47,13 +50,13 @@ You should see a row of dots and finally `384 passed`. Each dot is one passed te
 | File | Tests | What it covers |
 |---|---|---|
 | `conftest.py` | (none) | Shared setup: off-screen Qt, temporary songs/playlist, helper functions |
-| `test_lyrics.py` | 45 | Lyric file encodings (UTF-8/UTF-16/GBK), `[mm:ss.xx]` time tags, which line shows when, the desktop lyric bar |
+| `test_lyrics.py` | 74 | Lyric file encodings (UTF-8/UTF-16/GBK), `[mm:ss.xx]` time tags, which line shows when, the desktop lyric bar, online lyrics: what to search for (tags only, the file name is never split), picking the version with the right length, the request to lrclib (against a fake local server), saving `song.lrc`, the title-only fallback search (and its 10 s length check) |
 | `test_playlist.py` | 59 | Which files are music, next/previous in all 4 play modes, saving and loading `IceList.json`, double-clicking a playlist row to play it |
 | `test_widgets.py` | 61 | Every skin image loads, hover buttons, scrolling title, click-to-seek slider, volume popup, dragging the window |
-| `test_player.py` | 124 | The main window: add/remove/clear, playlist colours and exact background opacity (also under a dark system theme), dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, progress slider (follows playback, drag to seek, click jumps to the mouse), real-world MP3s (tags, garbled GBK tags, embedded cover, LAME header), lyrics sync, covers, drag & drop, closing |
+| `test_player.py` | 146 | The main window: add/remove/clear, playlist colours and exact background opacity (also under a dark system theme), dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, progress slider (follows playback, drag to seek, click jumps to the mouse), real-world MP3s (tags, garbled GBK tags, embedded cover, LAME header), lyrics sync, online lyrics from the lyric button (searching / not found / failed and retry, late answers ignored, MP3 tags used, automatic search on song change while the bar is open), covers, drag & drop, closing |
 | `test_tags.py` | 25 | Reading title/artist/album with mutagen: old tags marked Latin-1 but really GBK (incl. the reported 松田聖子 bytes), Shift-JIS, UTF-8; real Latin-1 names left alone; Big5 via `ICEPLAYER_TAG_ENCODING`; several artists; album artist; files without tags or damaged |
 | `test_mini.py` | 16 | About box, mini window buttons and menu, keeping it in sync with the main window |
-| `test_app.py` | 15 | Only one player at a time (a second launch hands its file over), where the playlist is saved (source, portable exe, installed exe), the real `run.py` / `python -m iceplayer` |
+| `test_app.py` | 16 | Only one player at a time (a second launch hands its file over), where the playlist is saved (source, portable exe, installed exe), the real `run.py` / `python -m iceplayer` |
 | `test_build.py` | 39 | The MSI installer builder: every file and folder inside, product name/version, Start-menu and desktop shortcuts, upgrade/downgrade rules, the setup wizard (every dialog, button target and Tab loop exists); `build.py` version checks |
 
 (Counts include every example of a parametrized test. Every file starts with a

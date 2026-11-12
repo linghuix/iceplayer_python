@@ -7,11 +7,13 @@ and the three side windows (lyric bar, mini window, About box). Methods are grou
 * playlist          add / remove / clear songs, file dialogs, right-click menu
 * playback          play, pause (with fade), next/previous, modes, volume, seeking
 * player callbacks  react to Qt media events (state, end of song, position, tags)
-* windows etc.      lyric bar, mini mode, saving, painting, drag & drop, closing
+* windows etc.      lyric bar (and online lyric search), mini mode, saving, painting,
+                    drag & drop, closing
 """
+import threading
 from pathlib import Path
 
-from PySide6.QtCore import QRect, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QRect, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QActionGroup, QColor, QCursor, QFont, QKeySequence, QPainter,
                            QPalette, QPixmap, QShortcut)
 from PySide6.QtMultimedia import QAudioOutput, QMediaMetaData, QMediaPlayer
@@ -19,7 +21,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFileDialog, QFr
                                QLabel, QMenu, QSlider, QTableWidget, QTableWidgetItem,
                                QWidget)
 
-from .lyrics import Lyrics, LyricWindow, load_lrc_for
+from .lyrics import (Lyrics, LyricWindow, load_lrc_for, log, parse_lrc,
+                     save_lrc_for, search_lrclib, search_terms)
 from .mini import AboutDialog, MiniWindow
 from .playlist import (AUDIO_EXTENSIONS, MODE_NAMES, PlayMode, is_audio, load_state,
                        next_index, previous_index, save_state)
@@ -31,6 +34,13 @@ from .widgets import (FONT_FAMILY, MENU_STYLE, SLIDER_STYLE, DraggableMixin, Ice
 SCROLL_THRESHOLD = 28   # titles longer than this marquee-scroll
 TEXT_SPEED = 500        # ms per scroll step
 INVALID = "失效"                    # status shown for missing or unplayable files
+# Lyric bar messages while/after searching lrclib.net for a song without a .lrc file.
+LYRIC_SEARCHING = "正在搜索歌词…"
+LYRIC_NOT_FOUND = "没有找到歌词"
+LYRIC_FAILED = "歌词搜索失败，请检查网络"
+# Song changed while the lyric bar is open: search once its tags (title/artist) are
+# read, or after this many ms if they never arrive.
+AUTO_LYRIC_WAIT_MS = 2000
 
 # --- Playlist colours --------------------------------------------------------------
 # Every colour of the playlist is set explicitly (backgrounds WITH their opacity, and
@@ -71,6 +81,42 @@ def fmt_ms(ms: int) -> str:
     return f"{s // 60:02d}:{s % 60:02d}"
 
 
+class LyricSearch(QObject):
+    """Runs ``search_lrclib`` in a background thread so the window never freezes.
+
+    Signals:
+        finished(path, lrc, error): emitted in the GUI thread when a search ends.
+            ``path`` is the song searched for, ``lrc`` the LRC text or None if nothing
+            was found, ``error`` "" or the reason the search failed (no internet...).
+    """
+
+    finished = Signal(str, object, str)
+
+    def start(self, path: str, title: str, artist: str, duration_ms: int):
+        """Start one search and return immediately.
+
+        Args:
+            path:        The song (only passed back in ``finished``).
+            title:       Title to search for.
+            artist:      Artist to search for, "" if unknown.
+            duration_ms: Song length (0 if unknown), to pick the matching version.
+        """
+        threading.Thread(target=self._run, args=(path, title, artist, duration_ms),
+                         daemon=True).start()
+
+    def _run(self, path, title, artist, duration_ms):
+        """Background thread: search and report through ``finished``. Takes the same
+        arguments as ``start``. Never raises."""
+        try:
+            lrc, error = search_lrclib(title, artist, duration_ms), ""
+        except (OSError, ValueError) as e:
+            lrc, error = None, str(e) or type(e).__name__
+        try:
+            self.finished.emit(path, lrc, error)    # queued to the GUI thread by Qt
+        except RuntimeError:
+            pass                                    # the player was closed meanwhile
+
+
 class IcePlayer(DraggableMixin, QWidget):
     """The main window.
 
@@ -103,6 +149,15 @@ class IcePlayer(DraggableMixin, QWidget):
         self.play_mode = PlayMode.SINGLE
         self.lyrics = Lyrics()
         self._file_tags = Tags()           # current song's tags read by mutagen
+        self._tag_title = ""      # title / artist tags of the current song ("" if none)
+        self._tag_artist = ""
+        self._lyrics_searched_for = None   # song already searched online (no repeat)
+        self._lyric_message_shown = False  # lyric bar shows a search message, not the title
+        self.lyric_search = LyricSearch(self)
+        self.lyric_search.finished.connect(self._on_online_lyrics)
+        self._auto_lyric_pending = False   # new song + open lyric bar: search when tags arrive
+        self._auto_lyric_timer = QTimer(self, singleShot=True, interval=AUTO_LYRIC_WAIT_MS)
+        self._auto_lyric_timer.timeout.connect(self._auto_search_lyrics)
         self._background = pixmap("background.png")
         self._default_cover = pixmap("default_album.jpg")
 
@@ -647,21 +702,25 @@ class IcePlayer(DraggableMixin, QWidget):
         md = self.media.metaData()
         path = Path(self.files[self.current_index])
         tags = self._file_tags
-        title = tags.title or md.stringValue(QMediaMetaData.Key.Title) or path.stem
+        title_tag = tags.title or md.stringValue(QMediaMetaData.Key.Title)
+        title = title_tag or path.stem
         artist = (tags.artist or md.stringValue(QMediaMetaData.Key.ContributingArtist)
                   or md.stringValue(QMediaMetaData.Key.AlbumArtist) or "未知音乐家")
         album = tags.album or md.stringValue(QMediaMetaData.Key.AlbumTitle) or "未知专辑"
+        self._tag_title = title_tag          # used by the lyric search (search_terms)
+        self._tag_artist = artist
         self._set_title(title)
         self.artist_label.setText(artist)
         self.album_label.setText(album)
-        if not self.lyrics:
-            self.lyric_window.set_text(title)
+        if not self.lyrics and not self._lyric_message_shown:
+            self.lyric_window.set_text(title)   # (keeps 正在搜索歌词… / 没有找到歌词 visible)
         if not path.with_suffix(".jpg").is_file():
             for key in (QMediaMetaData.Key.CoverArtImage, QMediaMetaData.Key.ThumbnailImage):
                 image = md.value(key)
                 if image is not None and hasattr(image, "isNull") and not image.isNull():
                     self.cover.setPixmap(QPixmap.fromImage(image))
                     break
+        self._auto_search_lyrics()      # tags known now: search if a song change asked to
 
     def _load_song_extras(self, path: str):
         """Load the lyrics and cover stored next to a song and show its file name until
@@ -670,15 +729,47 @@ class IcePlayer(DraggableMixin, QWidget):
         Args:
             path: Song path; reads ``song.lrc`` and ``song.jpg`` from the same folder
                   (default cover if there is no .jpg).
+
+        If the lyric bar is open and the song has no lyric file, the lyrics are
+        searched online automatically, once the tags are read (``_on_metadata``) or
+        after ``AUTO_LYRIC_WAIT_MS`` (``_auto_search_lyrics``).
         """
         self.lyrics = Lyrics(load_lrc_for(path))
         self._file_tags = read_tags(path)     # title/artist/album via mutagen (fast)
+        self._tag_title = self._tag_artist = ""
+        self._lyrics_searched_for = None
+        self._lyric_message_shown = False
         self._set_title(Path(path).stem)
         self.artist_label.setText("")
         self.album_label.setText("")
         self.lyric_window.set_text(Path(path).stem)
         cover = QPixmap(str(Path(path).with_suffix(".jpg")))
         self.cover.setPixmap(cover if not cover.isNull() else self._default_cover)
+        self._auto_lyric_pending = False
+        self._auto_lyric_timer.stop()
+        if self.lyric_window.isVisible():
+            if self.lyrics:
+                log.info("[歌词] 换歌: %s，已有歌词文件 %s", Path(path).name,
+                         Path(path).with_suffix(".lrc").name)
+            else:
+                log.info("[歌词] 换歌: %s，歌词栏开着但没有歌词文件，读取标签后在线搜索",
+                         Path(path).name)
+                self._auto_lyric_pending = True
+                self._auto_lyric_timer.start()
+
+    def _auto_search_lyrics(self):
+        """Run the online search a song change asked for (see ``_load_song_extras``).
+
+        Called when the tags arrive and by the backup timer; whichever comes first
+        searches, the other does nothing. Nothing happens if the lyric bar was closed
+        in the meantime.
+        """
+        if not self._auto_lyric_pending:
+            return
+        self._auto_lyric_pending = False
+        self._auto_lyric_timer.stop()
+        if self.lyric_window.isVisible():
+            self.search_online_lyrics()
 
     def _set_title(self, title: str):
         """Show the song title; titles longer than 28 characters scroll.
@@ -705,17 +796,97 @@ class IcePlayer(DraggableMixin, QWidget):
         self.progress.setEnabled(False)
         self.lyrics = Lyrics()
         self._file_tags = Tags()
+        self._tag_title = self._tag_artist = ""
+        self._lyric_message_shown = False
+        self._auto_lyric_pending = False
+        self._auto_lyric_timer.stop()
         self.lyric_window.set_text("冰点播放器")
 
     # ---------------------------------------------------------- windows etc.
     def toggle_lyrics(self):
         """Lyric button: show or hide the desktop lyric bar. The first time it is shown
-        it is placed centred near the bottom of the screen."""
+        it is placed centred near the bottom of the screen. When it is shown and the
+        current song has no lyric file, the lyrics are searched online
+        (``search_online_lyrics``)."""
         self.lyric_window.setVisible(self.lyric_window.isHidden())
+        log.info("[歌词] 歌词按钮: %s歌词栏", "显示" if self.lyric_window.isVisible() else "隐藏")
         if self.lyric_window.isVisible() and not getattr(self, "_lyric_placed", False):
             screen = self.screen().availableGeometry()
             self.lyric_window.move(screen.center().x() - 400, screen.bottom() - 140)
             self._lyric_placed = True
+        if self.lyric_window.isVisible():
+            self.search_online_lyrics()
+
+    def search_online_lyrics(self) -> bool:
+        """Search lrclib.net for the current song's lyrics, in the background.
+
+        Searches only when a song is loaded, it has no lyrics yet, there is no
+        ``song.lrc`` next to it, and it wasn't already searched for (a failed search,
+        e.g. without internet, may be retried). Title and artist come from the tags
+        (the whole file name is the title only if there is no title tag; see
+        ``search_terms``). The lyric bar
+        shows 正在搜索歌词… until ``_on_online_lyrics`` gets the answer.
+
+        Returns:
+            True if a search was started.
+        """
+        if self.current_index < 0:
+            log.info("[歌词] 没有选中歌曲，不搜索")
+            return False
+        path = self.files[self.current_index]
+        lrc = Path(path).with_suffix(".lrc")
+        if self.lyrics:
+            log.info("[歌词] %s 已有歌词 (%s)，不搜索", Path(path).name, lrc.name)
+            return False
+        if lrc.is_file():
+            log.info("[歌词] 已有歌词文件 %s，但里面没有带时间的歌词行，不搜索", lrc)
+            return False
+        if path == self._lyrics_searched_for:
+            log.info("[歌词] %s 已经搜索过，不再搜索", Path(path).name)
+            return False
+        self._lyrics_searched_for = path
+        title, artist = search_terms(self._tag_title, self._tag_artist, Path(path).stem)
+        log.info("[歌词] %s 没有歌词文件，开始在线搜索 (标签: 歌名=%r 歌手=%r)", Path(path).name,
+                 self._tag_title, self._tag_artist)
+        self.lyric_window.set_text(LYRIC_SEARCHING)
+        self._lyric_message_shown = True
+        self.lyric_search.start(path, title, artist, max(0, self.media.duration()))
+        return True
+
+    def _on_online_lyrics(self, path: str, lrc, error: str):
+        """Search callback (GUI thread): use the downloaded lyrics.
+
+        Args:
+            path:  The song that was searched for. If another song is playing by now,
+                   the answer is ignored.
+            lrc:   LRC text, or None if nothing was found.
+            error: "" or why the search failed.
+
+        Found: saved as ``song.lrc`` next to the song (if that folder is writable) and
+        shown at once. Not found: the bar shows 没有找到歌词. Failed: it shows
+        歌词搜索失败，请检查网络, and the next click on the lyric button tries again.
+        """
+        if self.current_index < 0 or self.files[self.current_index] != path:
+            log.info("[歌词] 已换歌，忽略 %s 的搜索结果", Path(path).name)
+            return
+        if lrc:
+            target = Path(path).with_suffix(".lrc")
+            if save_lrc_for(path, lrc):
+                log.info("[歌词] 已保存到 %s", target)
+            else:
+                log.info("[歌词] 无法保存 %s (文件夹不可写或文件已存在)，只显示不保存", target)
+            self.lyrics = Lyrics(parse_lrc(lrc))
+            log.info("[歌词] 显示 %d 行歌词", len(self.lyrics.entries))
+            line = self.lyrics.line_at(self.media.position())
+            self.lyric_window.set_text(line if line is not None else
+                                       (self._tag_title or Path(path).stem))
+        elif error:
+            log.info("[歌词] 搜索失败: %s (下次显示歌词栏时重试)", error)
+            self._lyrics_searched_for = None
+            self.lyric_window.set_text(LYRIC_FAILED)
+        else:
+            log.info("[歌词] 没有找到带时间轴的歌词")
+            self.lyric_window.set_text(LYRIC_NOT_FOUND)
 
     def enter_mini_mode(self):
         """Mini-mode button: hide this window and show the mini window (top-right of the

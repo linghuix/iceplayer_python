@@ -45,6 +45,25 @@ python run.py "D:/Music/song.mp3"
   original, the whole window is 90% opaque on top of that (`setWindowOpacity(0.9)`).
 - Desktop lyrics: an always-on-top bar that reads `song.lrc` next to the song file.
   UTF-8, UTF-16 and GBK files are all supported. Right-click the bar to hide it.
+- Online lyrics: if the song has no `song.lrc`, showing the lyric bar (lyric button,
+  or 桌面歌词 in the mini window) searches [lrclib.net](https://lrclib.net) in the
+  background, by title + artist from the song's tags. The file name is never split
+  into title and artist; it is only used, whole, as the title when there is no
+  title tag.
+  If title + artist find nothing (e.g. the tag says "Jay Chou" but lrclib has
+  周杰伦), it searches again by title only, and then accepts only versions within
+  10 s of the song's length, so a different song with the same name isn't used.
+  While the bar is open, every song change (next/previous, double-click, end of
+  song) checks again: a song without `.lrc` is searched automatically once its
+  tags are read (or after 2 s if it has none).
+  The version whose length matches the song is used and saved as `song.lrc` next to
+  it, so later plays work offline. The bar shows 正在搜索歌词… meanwhile, then
+  没有找到歌词 (not searched again for that song) or 歌词搜索失败，请检查网络 (tried
+  again next time the bar is shown). Only the title and artist are sent.
+  Started from a console (`python run.py`, VS Code), every step is printed as
+  `12:34:56 [歌词] ...`: the address searched, each result (album, length, timed or
+  not), the one chosen and where the `.lrc` was saved. The packaged exe has no
+  console and prints nothing.
 - Title, artist and album are read with [mutagen](https://mutagen.readthedocs.io)
   (`iceplayer/tags.py`), which also keeps every artist of a song ("李宇春/张杰").
   Old Chinese/Japanese tags are repaired: many MP3s store GBK or Shift-JIS bytes in
@@ -67,9 +86,9 @@ python run.py "D:/Music/song.mp3"
 
 ## Changes from the C++ version
 
-- **Online lyrics/cover download removed.** The Baidu Music API it called no
-  longer exists. Local `.lrc` and `.jpg` files, including ones the old version
-  downloaded, still work.
+- **Online lyrics come from lrclib.net; online covers were removed.** The Baidu
+  Music API the original used no longer exists. Local `.lrc` and `.jpg` files,
+  including ones the old version downloaded, still work.
 - Qt 6 has no `QMediaPlaylist`, so play modes are handled in `playlist.py`.
 - The playlist is now JSON (`IceList.json`) instead of the binary `IceList.ilst`.
 - The app no longer registers itself as an `.mp3` handler in the registry. Use
@@ -79,7 +98,7 @@ python run.py "D:/Music/song.mp3"
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest            # 384 tests, about 40 s
+python -m pytest            # 436 tests, about 75 s
 python -m pytest tests/test_lyrics.py -v    # one file, verbose
 ```
 
@@ -89,10 +108,10 @@ your real `IceList.json` and never talk to a player you have open.
 
 | File | Covers |
 |---|---|
-| `tests/test_lyrics.py` | LRC encoding detection, time-tag parsing, lyric lookup, desktop lyric window |
+| `tests/test_lyrics.py` | LRC encoding detection, time-tag parsing, lyric lookup, desktop lyric window, online lyric search (title/artist guess, choosing a result, saving .lrc) |
 | `tests/test_playlist.py` | audio file types, next/previous for every play mode, saving/loading state |
 | `tests/test_widgets.py` | every skin image, hover buttons, scrolling title, volume popup, window dragging |
-| `tests/test_player.py` | playlist add/remove/clear, dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, progress slider (follows playback, drag to seek, click jumps to the mouse), real-world MP3s (ID3 tags, garbled GBK tags incl. the reported 松田聖子 file, embedded cover, LAME header), lyrics sync, cover art, drag & drop, saving on close |
+| `tests/test_player.py` | playlist add/remove/clear, dialogs, right-click menu, play/pause/fade, next/prev, end-of-song per mode, progress slider (follows playback, drag to seek, click jumps to the mouse), real-world MP3s (ID3 tags, garbled GBK tags incl. the reported 松田聖子 file, embedded cover, LAME header), lyrics sync, online lyrics from the lyric button (searching message, saved .lrc, not found / failed / retry, answer for a previous song ignored), cover art, drag & drop, saving on close |
 | `tests/test_tags.py` | reading tags with mutagen: GBK / Shift-JIS / UTF-8 tags marked Latin-1 (the garbled-artist bug), real Latin-1 names untouched, Big5 fallback, several artists, album artist, files without tags |
 | `tests/test_mini.py` | about dialog, mini window buttons and menu, syncing with the main window |
 | `tests/test_app.py` | single-instance handoff from a second process, where the playlist is saved, the real `run.py` / `python -m iceplayer` launchers |
@@ -141,7 +160,7 @@ It:
 - lists IcePlayer, with its icon, in **Settings → Apps**, where it can be uninstalled;
 - replaces an older installed version; refuses to install over a newer one.
 
-The version comes from `__version__` in `iceplayer/__init__.py` (now 2.1.2).
+The version comes from `__version__` in `iceplayer/__init__.py` (now 2.2.0).
 **Raise it for every installer you hand out**, otherwise Windows can't tell the new
 MSI is an upgrade. The installed program keeps its playlist in
 `%LOCALAPPDATA%\IcePlayer\IceList.json`, so it survives upgrades and uninstalling.
@@ -179,9 +198,9 @@ never mistaken for releases. (`--zip` still packs the folder version as
 ## Releases (MSI + portable exe on GitHub)
 
 `.github/workflows/release.yml` builds and publishes a version automatically. To
-release version 2.1.3:
+release version 2.2.0:
 
-1. Set `__version__ = "2.1.3"` in `iceplayer/__init__.py`, run `python -m pytest`
+1. Set `__version__ = "2.2.0"` in `iceplayer/__init__.py`, run `python -m pytest`
    locally (GitHub's build machines have no sound card, so the audio tests only run
    on your PC), and commit.
 2. Push the commit and a matching tag:
@@ -190,18 +209,18 @@ release version 2.1.3:
    git push origin master
    ```
    ```bash
-   git tag -a v2.1.3 -m "IcePlayer 2.1.3: <what changed>"
+   git tag -a v2.2.0 -m "IcePlayer 2.2.0: <what changed>"
    ```
    ```bash
-   git push origin v2.1.3
+   git push origin v2.2.0
    ```
 
 3. GitHub Actions (the **Actions** tab) then, on a Windows machine:
-   - checks that the tag matches `__version__` (stops if `v2.1.3` ≠ `2.1.3`);
+   - checks that the tag matches `__version__` (stops if `v2.2.0` ≠ `2.2.0`);
    - runs the tests that need no sound card;
    - runs `python build.py --skip-tests --onefile --msi`;
-   - creates the GitHub Release **v2.1.3** (notes taken from the tag message) with
-     `IcePlayer-2.1.3.msi` and `IcePlayer-2.1.3-portable.exe` attached. If the
+   - creates the GitHub Release **v2.2.0** (notes taken from the tag message) with
+     `IcePlayer-2.2.0.msi` and `IcePlayer-2.2.0-portable.exe` attached. If the
      release already exists, its files are replaced.
 
 **Actions → Release → Run workflow** (enter a tag) re-runs it by hand, but only for
@@ -222,7 +241,7 @@ run.py                  launcher
 iceplayer/app.py        startup + single-instance (QLocalServer)
 iceplayer/player.py     main window and playback
 iceplayer/playlist.py   play-mode logic, saving
-iceplayer/lyrics.py     LRC parser + desktop lyric window
+iceplayer/lyrics.py     LRC parser, lrclib.net search, desktop lyric window
 iceplayer/mini.py       mini window + about dialog
 iceplayer/tags.py       title/artist/album via mutagen, repairs old GBK/Shift-JIS tags
 iceplayer/widgets.py    hover buttons, scrolling label, seek slider, volume button, dragging

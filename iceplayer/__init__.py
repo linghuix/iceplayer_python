@@ -2,4 +2,4 @@
 
 #: Program version (major.minor.patch, numbers only). Used for the MSI installer:
 #: raise it for every installer you hand out, so Windows treats it as an upgrade.
-__version__ = "2.1.3"
+__version__ = "2.2.0"

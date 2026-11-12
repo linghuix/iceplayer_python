@@ -12,6 +12,7 @@ What lives here
     - ``songs``     the three song paths from ``music_dir``, in a fixed order.
     - ``player``    a fresh main window (IcePlayer) using a temporary playlist file,
                     cleaned up after each test.
+    - ``lrclib``    a fake lrclib.net lyric server on this computer (see below).
 * Helpers imported by the test files:
     - ``process(ms)``          let Qt handle events for ``ms`` milliseconds.
     - ``wait_until(cond, ms)`` keep handling events until ``cond()`` is true or time runs out.
@@ -28,6 +29,10 @@ starts playback and immediately checks the result would see nothing yet, so test
 
 Nothing here touches your real playlist (IceList.json): every player gets its own
 file inside pytest's ``tmp_path`` folder, which is deleted afterwards.
+
+No test uses the internet: the online lyric search is pointed at a closed local port
+(so any accidental search fails at once), and tests that need answers use the
+``lrclib`` fixture's fake server.
 """
 import math
 import os
@@ -41,6 +46,9 @@ from types import SimpleNamespace
 # Must be set before PySide6 is imported: draw windows in memory, not on screen.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QT_LOGGING_RULES", "*.debug=false;qt.multimedia.*=false")
+# Never search lyrics on the real lrclib.net from tests (also inherited by the
+# run.py / exe processes some tests start). Port 9 is closed: a search fails at once.
+os.environ["ICEPLAYER_LRCLIB_URL"] = "http://127.0.0.1:9/api/search"
 
 # Make "import iceplayer" work no matter which folder pytest was started from.
 ROOT = Path(__file__).resolve().parent.parent
@@ -286,3 +294,49 @@ def player(qapp, tmp_path, monkeypatch):
     p.mini_window.close()
     p.deleteLater()
     process(20)
+
+
+@pytest.fixture
+def lrclib(monkeypatch):
+    """A fake lrclib.net search server on 127.0.0.1, used instead of the real one.
+
+    Yields an object with:
+        results   list sent back as JSON for every search (default: empty list).
+        respond   optional function(query dict) -> results, used instead of
+                  ``results`` (e.g. answer only searches without an artist).
+        status    HTTP status to answer with (default 200; e.g. 500 to fail).
+        delay     seconds to wait before answering (default 0).
+        requests  list of query dicts received, e.g. [{"track_name": "晴天", ...}].
+
+    ``ICEPLAYER_LRCLIB_URL`` points at it during the test; it is stopped afterwards.
+    """
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qsl, urlsplit
+
+    state = SimpleNamespace(results=[], respond=None, status=200, delay=0.0, requests=[])
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            query = dict(parse_qsl(urlsplit(self.path).query))
+            state.requests.append(query | {"_ua": self.headers.get("User-Agent", "")})
+            time.sleep(state.delay)
+            results = state.respond(query) if state.respond else state.results
+            body = json.dumps(results).encode("utf-8")
+            self.send_response(state.status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass                       # keep pytest output clean
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("ICEPLAYER_LRCLIB_URL", f"http://127.0.0.1:{server.server_port}/api/search")
+    yield state
+    server.shutdown()
+    server.server_close()

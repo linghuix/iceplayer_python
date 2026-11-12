@@ -7,6 +7,7 @@ How the single-instance rule works:
 2. Otherwise this launch becomes the player and calls ``start_server`` to listen on
    that pipe for later launches.
 """
+import logging
 import os
 import sys
 import uuid
@@ -166,6 +167,31 @@ def start_server(player: IcePlayer) -> QLocalServer:
     return server
 
 
+def setup_console_log() -> bool:
+    """Print IcePlayer's INFO messages (e.g. the online lyric search: the address
+    searched, the results, the file saved) to the console, as ``12:34:56 [歌词] ...``.
+
+    Returns:
+        True if set up. False when there is no console: the packaged IcePlayer.exe has
+        none (``sys.stderr`` is None), and then nothing is printed. Calling it twice
+        doesn't print every message twice.
+    """
+    if sys.stderr is None:
+        return False
+    try:
+        sys.stderr.reconfigure(errors="backslashreplace")   # GBK console + Japanese text
+    except (AttributeError, ValueError):
+        pass
+    logger = logging.getLogger("iceplayer")
+    logger.setLevel(logging.INFO)
+    if not any(getattr(h, "_iceplayer_console", False) for h in logger.handlers):
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
+        handler._iceplayer_console = True
+        logger.addHandler(handler)
+    return True
+
+
 def use_light_colors(app: QApplication) -> bool:
     """Make the whole app use light colours, even when Windows is in dark mode.
 
@@ -196,6 +222,7 @@ def main() -> int:
         The process exit code: 0 if the file was handed to an already running player,
         otherwise the Qt event loop's exit code when the window is closed.
     """
+    setup_console_log()
     QCoreApplication.setApplicationName("IcePlayer")
     app = QApplication(sys.argv)
     app.setApplicationDisplayName("冰点播放器")
